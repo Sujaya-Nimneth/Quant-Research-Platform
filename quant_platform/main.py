@@ -120,6 +120,36 @@ def handle_status(args):
             print("Table: signals [NOT CREATED YET]\n")
         print("="*50 + "\n")
 
+def handle_backtest(args):
+    """
+    Handles the 'backtest' CLI command.
+    """
+    logger.info("Initializing Backtesting CLI Module...")
+    
+    # 1. Instantiate selected strategy
+    if args.strategy == "rsi":
+        from quant_platform.backtest.strategy import RSIStrategy
+        strategy = RSIStrategy(
+            entry_threshold=args.rsi_entry,
+            exit_threshold=args.rsi_exit
+        )
+    else:
+        logger.error(f"Strategy '{args.strategy}' is not supported yet.")
+        sys.exit(1)
+        
+    # 2. Instantiate and run Backtest Engine
+    try:
+        from quant_platform.backtest.engine import BacktestEngine
+        engine = BacktestEngine(strategy)
+        engine.run(
+            init_cash=args.init_cash,
+            fee=args.fee,
+            output_path=args.output
+        )
+    except Exception as e:
+        logger.error(f"Failed to complete backtest run: {e}")
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Quant Research Platform Ingestion & Feature Engineering CLI"
@@ -157,6 +187,46 @@ def main():
     # 3. Status Command
     subparsers.add_parser("status", help="Print database diagnostics and sample feature rows")
     
+    # 4. Backtest Command
+    backtest_parser = subparsers.add_parser("backtest", help="Simulate a portfolio using VectorBT signal-based backtesting")
+    backtest_parser.add_argument(
+        "--strategy",
+        type=str,
+        default="rsi",
+        choices=["rsi"],
+        help="Name of the strategy to run (default: rsi)"
+    )
+    backtest_parser.add_argument(
+        "--init-cash",
+        type=float,
+        default=10000.0,
+        help="Initial capital in cash (default: 10000.0)"
+    )
+    backtest_parser.add_argument(
+        "--fee",
+        type=float,
+        default=0.001,
+        help="Transaction fee per trade as a fraction (default: 0.001, i.e. 10 bps)"
+    )
+    backtest_parser.add_argument(
+        "--output",
+        type=str,
+        default="data/backtest_results.json",
+        help="Target JSON path to export trade logs & statistics (default: data/backtest_results.json)"
+    )
+    backtest_parser.add_argument(
+        "--rsi-entry",
+        type=float,
+        default=30.0,
+        help="RSI buy threshold (default: 30.0)"
+    )
+    backtest_parser.add_argument(
+        "--rsi-exit",
+        type=float,
+        default=70.0,
+        help="RSI sell threshold (default: 70.0)"
+    )
+    
     args = parser.parse_args()
     
     if args.command == "ingest":
@@ -165,6 +235,8 @@ def main():
         handle_features(args)
     elif args.command == "status":
         handle_status(args)
+    elif args.command == "backtest":
+        handle_backtest(args)
 
 if __name__ == "__main__":
     main()
