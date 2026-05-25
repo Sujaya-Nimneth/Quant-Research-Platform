@@ -59,6 +59,10 @@ class BacktestEngine:
         close_pivot, rsi_pivot = close_pivot.align(rsi_pivot, join="inner", axis=0)
         close_pivot, rsi_pivot = close_pivot.align(rsi_pivot, join="inner", axis=1)
         
+        # Explicitly set index as standard DatetimeIndex for VectorBT
+        close_pivot.index = pd.DatetimeIndex(close_pivot.index)
+        rsi_pivot.index = pd.DatetimeIndex(rsi_pivot.index)
+        
         logger.info(f"Aligned historical datasets. Backtesting {len(close_pivot.columns)} symbols across {len(close_pivot)} trading sessions.")
         return close_pivot, rsi_pivot
 
@@ -81,43 +85,42 @@ class BacktestEngine:
             exits=exits,
             init_cash=init_cash,
             fees=fee,
-            freq="D"
+            freq="1D"
         )
         
         # 4. Generate stats series
         stats = portfolio.stats()
         
-        # Extract core metrics safely from stats series
+        # Extract core metrics safely from stats series or direct fallbacks
         total_return = float(stats.get("Total Return [%]", 0.0)) / 100.0
-        annualized_return = float(stats.get("Annualized Return [%]", 0.0)) / 100.0
+        
+        # Fallback to direct method for annualized return if missing/zero in stats
+        raw_ann_ret = stats.get("Annualized Return [%]", None)
+        if raw_ann_ret is None or float(raw_ann_ret) == 0.0:
+            annualized_return = float(portfolio.annualized_return().mean())
+        else:
+            annualized_return = float(raw_ann_ret) / 100.0
+            
         max_drawdown = float(stats.get("Max Drawdown [%]", 0.0)) / 100.0
-        sharpe_ratio = float(stats.get("Sharpe Ratio", np.nan))
-        total_trades = int(stats.get("Total Trades", 0))
+        
+        raw_sharpe = stats.get("Sharpe Ratio", None)
+        if raw_sharpe is None or np.isnan(raw_sharpe) or np.isinf(raw_sharpe) or float(raw_sharpe) == 0.0:
+            sharpe_ratio = float(portfolio.sharpe_ratio().mean())
+        else:
+            sharpe_ratio = float(raw_sharpe)
+            
         win_rate = float(stats.get("Win Rate [%]", 0.0)) / 100.0
         final_value = float(stats.get("End Value", init_cash))
         
-        # Handle cases where Sharpe Ratio is invalid (e.g. division by zero standard dev)
+        # Clean infinite/NaN metrics
         if np.isnan(sharpe_ratio) or np.isinf(sharpe_ratio):
             sharpe_ratio = 0.0
-
-        # Output Performance Tear Sheet to Console
-        print("\n" + "="*50)
-        print("          VECTORBT PERFORMANCE TEAR SHEET")
-        print("="*50)
-        print(f"Strategy Name:      {self.strategy.name}")
-        print(f"Initial Capital:    ${init_cash:,.2f}")
-        print(f"Final Equity:       ${final_value:,.2f}")
-        print(f"Total Return:       {total_return * 100:.2f}%")
-        print(f"Annualized Return:  {annualized_return * 100:.2f}%")
-        print(f"Max Drawdown:       {max_drawdown * 100:.2f}%")
-        print(f"Sharpe Ratio:       {sharpe_ratio:.4f}")
-        print(f"Total Trades Run:   {total_trades}")
-        print(f"Win Rate:           {win_rate * 100:.2f}%")
-        print("="*50 + "\n")
+        if np.isnan(annualized_return) or np.isinf(annualized_return):
+            annualized_return = 0.0
 
         # 5. Extract trade logs
         logger.info("Extracting portfolio trade records...")
-        trades_df = portfolio.trades.to_df()
+        trades_df = portfolio.trades.records_readable
         
         trade_logs = []
         if not trades_df.empty:
@@ -144,12 +147,29 @@ class BacktestEngine:
                     "symbol": str(symbol),
                     "entry_date": entry_date,
                     "exit_date": exit_date,
-                    "entry_price": float(row.get("Entry Price", 0.0)),
-                    "exit_price": float(row.get("Exit Price", 0.0)),
+                    "entry_price": float(row.get("Avg Entry Price", row.get("Entry Price", 0.0))),
+                    "exit_price": float(row.get("Avg Exit Price", row.get("Exit Price", 0.0))),
                     "size": float(row.get("Size", 0.0)),
                     "pnl": float(row.get("PnL", 0.0)),
                     "return_pct": float(row.get("Return", 0.0)) * 100.0
                 })
+        
+        total_trades = len(trade_logs)
+
+        # Output Performance Tear Sheet to Console
+        print("\n" + "="*50)
+        print("          VECTORBT PERFORMANCE TEAR SHEET")
+        print("="*50)
+        print(f"Strategy Name:      {self.strategy.name}")
+        print(f"Initial Capital:    ${init_cash:,.2f}")
+        print(f"Final Equity:       ${final_value:,.2f}")
+        print(f"Total Return:       {total_return * 100:.2f}%")
+        print(f"Annualized Return:  {annualized_return * 100:.2f}%")
+        print(f"Max Drawdown:       {max_drawdown * 100:.2f}%")
+        print(f"Sharpe Ratio:       {sharpe_ratio:.4f}")
+        print(f"Total Trades Run:   {total_trades}")
+        print(f"Win Rate:           {win_rate * 100:.2f}%")
+        print("="*50 + "\n")
                 
         # 6. Build the export payload
         results = {
