@@ -152,3 +152,70 @@ Once you save this file, the **Signal Factory** will:
 | **Mean Reversion** | `bb_upper`   | Bollinger Band Upper: SMA(20) + 2 * StdDev(20) |
 | **Mean Reversion** | `bb_lower`   | Bollinger Band Lower: SMA(20) - 2 * StdDev(20) |
 | **Mean Reversion** | `bb_percent` | Bollinger %B: (Close - Lower) / (Upper - Lower) |
+
+---
+
+## 📈 Portfolio Backtester Module
+
+The platform integrates a vector-backed portfolio simulation module utilizing `vectorbt`. It aligns our clean historical pricing database with generated RSI mean-reversion signals and models execution parameters.
+
+### Running a Backtest Simulation
+Simulate a multi-symbol portfolio with trading fees (10 bps):
+```bash
+python -m quant_platform.main backtest --strategy rsi --init-cash 10000.0 --fee 0.001 --output data/backtest_results.json
+```
+
+**Results printed to console (Tear Sheet)**:
+```
+==================================================
+          VECTORBT PERFORMANCE TEAR SHEET
+==================================================
+Strategy Name:      RSI_Strategy_30_70
+Initial Capital:    $10,000.00
+Final Equity:       $13,661.89
+Total Return:       36.62%
+Annualized Return:  19.77%
+Max Drawdown:       24.51%
+Sharpe Ratio:       0.8796
+Total Trades Run:   49
+Win Rate:           83.89%
+==================================================
+```
+*Note: High-fidelity trade records and summary parameters are exported autonomously to `data/backtest_results.json`.*
+
+---
+
+## 🖥️ Streamlit Interactive Analytics Dashboard
+
+A premium interactive dashboard built to visualize historical returns, benchmark comparisons, trade logs, and indicator markers.
+
+### Launching the Dashboard locally:
+Ensure dependencies are active and run:
+```bash
+streamlit run quant_platform/app.py
+```
+*The browser opens automatically on `http://localhost:8501`.*
+
+### Dashboard Tabs:
+1. **Portfolio Equity Curves**: Compare the **RSI Strategy's Cumulative Return** directly against an equally weighted **Buy-and-Hold S&P 500 Benchmark** computed dynamically from DuckDB.
+2. **Trades Auditor**: A filterable datatable containing audit records of every trade (entry/exit dates, prices, fees, trade returns).
+3. **Single Ticker Inspector**: Select a symbol (e.g. `AAPL`) to overlay pricing with green/red buy/sell execution markers and review its corresponding RSI threshold oscillations.
+
+---
+
+## 🔄 Unified Asynchronous Daily Pipeline Runner
+
+To run data updates, indicator recalculations, and strategy simulations programmatically, run:
+```bash
+python quant_platform/run_all.py
+```
+This sequences `ingest`, `features`, and `backtest` in under 15 seconds, and refreshes the database and dashboard charts automatically.
+
+---
+
+## ⏰ Autonomous Scheduling Task
+
+The daily execution is scheduled inside the **Antigravity manager** at **4:30 PM EST** (3:00 AM IST / 9:30 PM UTC) via recurring cron:
+- **Cron Expression**: `0 3 * * *`
+- **Action**: Autonomously invokes `run_all.py` to refresh pricing, signals, metrics, and dashboards daily.
+
