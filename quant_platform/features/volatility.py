@@ -31,10 +31,12 @@ class VolatilitySignal(BaseSignal):
     def compute(self, data: pd.DataFrame) -> pd.DataFrame:
         df = data.sort_values("date").copy()
 
-        result_df = pd.DataFrame({
-            "symbol": df["symbol"],
-            "date": df["date"],
-        })
+        result_df = pd.DataFrame(
+            {
+                "symbol": df["symbol"],
+                "date": df["date"],
+            }
+        )
 
         rolling_std = df["close"].rolling(window=self._window).std()
 

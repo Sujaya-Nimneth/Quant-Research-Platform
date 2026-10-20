@@ -1,7 +1,9 @@
 import logging
+
 import duckdb
 
 logger = logging.getLogger(__name__)
+
 
 def init_db(conn: duckdb.DuckDBPyConnection) -> None:
     """
@@ -9,7 +11,7 @@ def init_db(conn: duckdb.DuckDBPyConnection) -> None:
     Creates daily_prices and signals tables with composite primary keys.
     """
     logger.info("Initializing database schema...")
-    
+
     # 1. Create daily_prices table
     conn.execute("""
         CREATE TABLE IF NOT EXISTS daily_prices (

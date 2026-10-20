@@ -93,7 +93,7 @@ def sortino_ratio(equity: pd.Series, risk_free: float = 0.0) -> float:
         return 0.0
     excess = returns - risk_free / TRADING_DAYS_PER_YEAR
     downside = excess.clip(upper=0)
-    downside_deviation = float(np.sqrt((downside ** 2).mean()))
+    downside_deviation = float(np.sqrt((downside**2).mean()))
     if downside_deviation == 0 or math.isnan(downside_deviation):
         return 0.0
     return float(excess.mean()) / downside_deviation * math.sqrt(TRADING_DAYS_PER_YEAR)

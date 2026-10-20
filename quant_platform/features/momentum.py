@@ -24,9 +24,7 @@ class MomentumSignals(BaseSignal):
         mom_period: int = 10,
     ):
         if macd_fast >= macd_slow:
-            raise ValueError(
-                f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow})."
-            )
+            raise ValueError(f"macd_fast ({macd_fast}) must be less than macd_slow ({macd_slow}).")
         self._macd_fast = macd_fast
         self._macd_slow = macd_slow
         self._macd_signal = macd_signal
@@ -48,10 +46,12 @@ class MomentumSignals(BaseSignal):
         """
         df = data.sort_values("date").copy()
 
-        result_df = pd.DataFrame({
-            "symbol": df["symbol"],
-            "date": df["date"],
-        })
+        result_df = pd.DataFrame(
+            {
+                "symbol": df["symbol"],
+                "date": df["date"],
+            }
+        )
 
         close = df["close"]
 

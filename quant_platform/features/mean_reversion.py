@@ -35,10 +35,12 @@ class MeanReversionSignals(BaseSignal):
         """
         df = data.sort_values("date").copy()
 
-        result_df = pd.DataFrame({
-            "symbol": df["symbol"],
-            "date": df["date"],
-        })
+        result_df = pd.DataFrame(
+            {
+                "symbol": df["symbol"],
+                "date": df["date"],
+            }
+        )
 
         close = df["close"]
 

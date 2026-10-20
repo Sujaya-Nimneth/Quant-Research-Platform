@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+
 import pandas as pd
+
 
 class BaseFetcher(ABC):
     """
@@ -9,12 +11,7 @@ class BaseFetcher(ABC):
     """
 
     @abstractmethod
-    def fetch_daily_data(
-        self, 
-        tickers: list[str], 
-        start_date: str, 
-        end_date: str
-    ) -> pd.DataFrame:
+    def fetch_daily_data(self, tickers: list[str], start_date: str, end_date: str) -> pd.DataFrame:
         """
         Fetch daily historical pricing and volume data for a list of tickers.
 

@@ -74,9 +74,7 @@ def test_engine_reports_portfolio_total_not_column_mean(seeded_db):
     # total return must be consistent with it.
     final = curve[-1]["value"]
     assert summary["final_value"] == pytest.approx(final, rel=1e-9)
-    assert summary["total_return_pct"] == pytest.approx(
-        (final / 10_000.0 - 1.0) * 100.0, rel=1e-9
-    )
+    assert summary["total_return_pct"] == pytest.approx((final / 10_000.0 - 1.0) * 100.0, rel=1e-9)
 
 
 def test_engine_declares_annualization_basis(seeded_db):

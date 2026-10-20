@@ -12,11 +12,13 @@ from quant_platform.features.volatility import VolatilitySignal
 
 
 def _close_frame(close: pd.Series) -> pd.DataFrame:
-    return pd.DataFrame({
-        "symbol": "AAA",
-        "date": pd.date_range("2024-01-01", periods=len(close), freq="D"),
-        "close": close.to_numpy(),
-    })
+    return pd.DataFrame(
+        {
+            "symbol": "AAA",
+            "date": pd.date_range("2024-01-01", periods=len(close), freq="D"),
+            "close": close.to_numpy(),
+        }
+    )
 
 
 def _reference_wilder_rsi(close: pd.Series, period: int = 14) -> np.ndarray:
@@ -25,8 +27,8 @@ def _reference_wilder_rsi(close: pd.Series, period: int = 14) -> np.ndarray:
     loss = (-delta.clip(upper=0)).to_numpy(dtype=float)
 
     out = np.full(len(close), np.nan)
-    avg_gain = gain[1:period + 1].mean()
-    avg_loss = loss[1:period + 1].mean()
+    avg_gain = gain[1 : period + 1].mean()
+    avg_loss = loss[1 : period + 1].mean()
     out[period] = _rsi_from(avg_gain, avg_loss)
 
     for i in range(period + 1, len(close)):
@@ -98,9 +100,7 @@ def test_momentum_roc_matches_pct_change():
     close = pd.Series(np.linspace(100, 150, 60))
     result = MomentumSignals(roc_period=5).compute(_close_frame(close))
     expected = close.pct_change(5) * 100.0
-    np.testing.assert_allclose(
-        result["roc"].to_numpy(), expected.to_numpy(), rtol=1e-9, atol=1e-9
-    )
+    np.testing.assert_allclose(result["roc"].to_numpy(), expected.to_numpy(), rtol=1e-9, atol=1e-9)
 
 
 def test_momentum_rejects_inverted_macd_windows():
@@ -114,6 +114,4 @@ def test_volatility_ratio_is_scale_free():
 
     assert result["volatility_15d"].iloc[:14].isna().all()
     expected = result["volatility_15d"] / close
-    np.testing.assert_allclose(
-        result["volatility_ratio_15d"].to_numpy(), expected.to_numpy(), rtol=1e-9, atol=1e-9
-    )
+    np.testing.assert_allclose(result["volatility_ratio_15d"].to_numpy(), expected.to_numpy(), rtol=1e-9, atol=1e-9)

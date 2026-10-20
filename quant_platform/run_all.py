@@ -34,9 +34,7 @@ def _run_step(label: str, args: list[str], echo_stdout: bool = False) -> None:
     (cron, systemd, an IDE task, or another directory).
     """
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, [str(BASE_DIR), env.get("PYTHONPATH", "")])
-    )
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(BASE_DIR), env.get("PYTHONPATH", "")]))
     command = [sys.executable, "-m", *args]
     logger.info("Running: %s", " ".join(command))
 
@@ -105,11 +103,16 @@ def run_all(
     _run_step(
         "Backtest simulation",
         [
-            "quant_platform.main", "backtest",
-            "--strategy", "rsi",
-            "--init-cash", str(init_cash),
-            "--fee", str(fee),
-            "--output", str(BACKTEST_RESULTS_PATH),
+            "quant_platform.main",
+            "backtest",
+            "--strategy",
+            "rsi",
+            "--init-cash",
+            str(init_cash),
+            "--fee",
+            str(fee),
+            "--output",
+            str(BACKTEST_RESULTS_PATH),
         ],
         echo_stdout=True,
     )

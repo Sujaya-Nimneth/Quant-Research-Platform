@@ -23,8 +23,7 @@ SIGNAL_TABLE = "signals"
 def table_exists(conn, table_name: str) -> bool:
     """Return True when ``table_name`` exists in the main schema."""
     row = conn.execute(
-        "SELECT table_name FROM information_schema.tables "
-        "WHERE table_schema = 'main' AND table_name = ?",
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main' AND table_name = ?",
         [table_name],
     ).fetchone()
     return row is not None
@@ -67,20 +66,13 @@ def load_aligned_matrices(indicators: list[str]) -> tuple[pd.DataFrame, dict[str
     require_tables()
 
     with get_db_connection(read_only=True) as conn:
-        price_df = conn.execute(
-            f"SELECT symbol, date, close FROM {PRICE_TABLE} ORDER BY date, symbol"
-        ).df()
+        price_df = conn.execute(f"SELECT symbol, date, close FROM {PRICE_TABLE} ORDER BY date, symbol").df()
 
         selected = ", ".join(["symbol", "date", *indicators])
-        signal_df = conn.execute(
-            f"SELECT {selected} FROM {SIGNAL_TABLE} ORDER BY date, symbol"
-        ).df()
+        signal_df = conn.execute(f"SELECT {selected} FROM {SIGNAL_TABLE} ORDER BY date, symbol").df()
 
     if price_df.empty or signal_df.empty:
-        raise ValueError(
-            "No rows found in 'daily_prices' or 'signals'. Run the ingestion and "
-            "feature pipelines first."
-        )
+        raise ValueError("No rows found in 'daily_prices' or 'signals'. Run the ingestion and feature pipelines first.")
 
     price_df["date"] = pd.to_datetime(price_df["date"])
     signal_df["date"] = pd.to_datetime(signal_df["date"])

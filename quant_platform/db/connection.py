@@ -1,10 +1,13 @@
 import logging
-import duckdb
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
+
+import duckdb
+
 from quant_platform.config import DB_PATH
 
 logger = logging.getLogger(__name__)
+
 
 @contextmanager
 def get_db_connection(read_only: bool = False) -> Generator[duckdb.DuckDBPyConnection, None, None]:

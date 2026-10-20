@@ -62,9 +62,7 @@ class YFinanceFetcher(BaseFetcher):
             tickers = [t for t in tickers if t]
 
             if len(tickers) < 400:
-                raise TickerListError(
-                    f"Wikipedia returned only {len(tickers)} tickers; expected ~500."
-                )
+                raise TickerListError(f"Wikipedia returned only {len(tickers)} tickers; expected ~500.")
 
             logger.info("Successfully retrieved %d S&P 500 tickers from Wikipedia.", len(tickers))
             return tickers
@@ -124,9 +122,7 @@ class YFinanceFetcher(BaseFetcher):
 
         if not all_data:
             logger.warning("No data was successfully fetched for any ticker.")
-            return pd.DataFrame(
-                columns=["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"]
-            )
+            return pd.DataFrame(columns=["symbol", "date", "open", "high", "low", "close", "adj_close", "volume"])
 
         final_df = pd.concat(all_data, ignore_index=True)
         logger.info("Download complete. Fetched %d daily price records.", len(final_df))
@@ -187,9 +183,7 @@ class YFinanceFetcher(BaseFetcher):
             logger.warning("Ticker %s frame missing columns %s, skipping.", symbol, missing)
             return None
 
-        adj_close_col = next(
-            (c for c in df.columns if "adj close" in c or "adj_close" in c), None
-        )
+        adj_close_col = next((c for c in df.columns if "adj close" in c or "adj_close" in c), None)
 
         cleaned = pd.DataFrame()
         cleaned["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date

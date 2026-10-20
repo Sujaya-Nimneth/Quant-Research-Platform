@@ -25,16 +25,18 @@ def _frame(symbols=("AAA",), dates=("2024-01-02", "2024-01-03")) -> pd.DataFrame
     rows = []
     for symbol in symbols:
         for i, day in enumerate(dates):
-            rows.append({
-                "symbol": symbol,
-                "date": pd.Timestamp(day).date(),
-                "open": 10.0 + i,
-                "high": 11.0 + i,
-                "low": 9.0 + i,
-                "close": 10.5 + i,
-                "adj_close": 10.4 + i,
-                "volume": 1000 + i,
-            })
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": pd.Timestamp(day).date(),
+                    "open": 10.0 + i,
+                    "high": 11.0 + i,
+                    "low": 9.0 + i,
+                    "close": 10.5 + i,
+                    "adj_close": 10.4 + i,
+                    "volume": 1000 + i,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -64,9 +66,7 @@ def test_full_refresh_ignores_stored_dates(empty_db):
     fetcher = StubFetcher(_frame())
     pipeline = IngestionPipeline(fetcher)
     pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01")
-    pipeline.run(
-        tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01", full_refresh=True
-    )
+    pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01", full_refresh=True)
 
     assert fetcher.calls[1][0] == "2024-01-01"
 
@@ -82,9 +82,7 @@ def test_upsert_updates_existing_rows_without_duplicating(empty_db):
 
     conn = duckdb.connect(str(empty_db), read_only=True)
     count = conn.execute("SELECT COUNT(*) FROM daily_prices").fetchone()[0]
-    close = conn.execute(
-        "SELECT close FROM daily_prices WHERE symbol='AAA' AND date = DATE '2024-01-02'"
-    ).fetchone()[0]
+    close = conn.execute("SELECT close FROM daily_prices WHERE symbol='AAA' AND date = DATE '2024-01-02'").fetchone()[0]
     conn.close()
 
     assert count == 2
@@ -103,15 +101,17 @@ def test_empty_fetch_is_a_no_op(empty_db):
 
 
 def test_normalize_handles_nan_volume_and_positive_filter():
-    raw = pd.DataFrame({
-        "Date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
-        "Open": [10.0, 10.0, 10.0],
-        "High": [11.0, 11.0, 11.0],
-        "Low": [9.0, 9.0, 9.0],
-        "Close": [10.5, 0.0, 10.7],
-        "Adj Close": [10.4, 0.0, 10.6],
-        "Volume": [1000, None, 1200],
-    })
+    raw = pd.DataFrame(
+        {
+            "Date": pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"]),
+            "Open": [10.0, 10.0, 10.0],
+            "High": [11.0, 11.0, 11.0],
+            "Low": [9.0, 9.0, 9.0],
+            "Close": [10.5, 0.0, 10.7],
+            "Adj Close": [10.4, 0.0, 10.6],
+            "Volume": [1000, None, 1200],
+        }
+    )
     result = YFinanceFetcher._normalize("AAA", raw)
 
     assert result is not None
@@ -143,8 +143,6 @@ def test_non_strict_ticker_discovery_falls_back(monkeypatch):
 
 
 def test_ticker_discovery_rejects_suspiciously_short_list(monkeypatch):
-    monkeypatch.setattr(
-        pd, "read_html", lambda *a, **k: [pd.DataFrame({"Symbol": ["AAA", "BBB"]})]
-    )
+    monkeypatch.setattr(pd, "read_html", lambda *a, **k: [pd.DataFrame({"Symbol": ["AAA", "BBB"]})])
     with pytest.raises(TickerListError):
         YFinanceFetcher().fetch_sp500_tickers(strict=True)

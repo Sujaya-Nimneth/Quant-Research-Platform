@@ -60,9 +60,7 @@ def test_dashboard_warns_when_no_backtest_export(populated_db, tmp_path, monkeyp
     from quant_platform.features.factory import SignalFactory
 
     SignalFactory().run_pipeline()
-    monkeypatch.setattr(
-        "quant_platform.config.BACKTEST_RESULTS_PATH", tmp_path / "does_not_exist.json"
-    )
+    monkeypatch.setattr("quant_platform.config.BACKTEST_RESULTS_PATH", tmp_path / "does_not_exist.json")
 
     at = AppTest.from_file(APP_PATH, default_timeout=180).run()
     assert not at.exception

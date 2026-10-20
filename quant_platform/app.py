@@ -2,7 +2,6 @@ import json
 import logging
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -12,13 +11,11 @@ from quant_platform.config import (
     BACKTEST_RESULTS_PATH,
     DEFAULT_EXECUTION_DELAY,
     DEFAULT_FEE,
-    DEFAULT_INIT_CASH,
 )
 from quant_platform.data_access import load_aligned_matrices
 from quant_platform.metrics import (
     drawdown_series,
     equal_weight_benchmark,
-    equity_curve,
     summarize,
     trade_win_rate,
 )
@@ -89,22 +86,26 @@ def load_trades(results: dict | None) -> pd.DataFrame:
 
 def build_equity_chart(strategy_equity: pd.Series, benchmark_equity: pd.Series) -> go.Figure:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=strategy_equity.index,
-        y=strategy_equity.values,
-        mode="lines",
-        name="RSI Mean-Reversion Strategy",
-        line=dict(color="#00C805", width=2.5),
-        hovertemplate="Date: %{x}<br>Strategy Equity: $%{y:,.2f}<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=benchmark_equity.index,
-        y=benchmark_equity.values,
-        mode="lines",
-        name="Equal-Weight Buy & Hold",
-        line=dict(color="#8C96A6", width=1.5, dash="dash"),
-        hovertemplate="Date: %{x}<br>Benchmark Equity: $%{y:,.2f}<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=strategy_equity.index,
+            y=strategy_equity.values,
+            mode="lines",
+            name="RSI Mean-Reversion Strategy",
+            line=dict(color="#00C805", width=2.5),
+            hovertemplate="Date: %{x}<br>Strategy Equity: $%{y:,.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=benchmark_equity.index,
+            y=benchmark_equity.values,
+            mode="lines",
+            name="Equal-Weight Buy & Hold",
+            line=dict(color="#8C96A6", width=1.5, dash="dash"),
+            hovertemplate="Date: %{x}<br>Benchmark Equity: $%{y:,.2f}<extra></extra>",
+        )
+    )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -119,17 +120,28 @@ def build_equity_chart(strategy_equity: pd.Series, benchmark_equity: pd.Series) 
 
 def build_drawdown_chart(strategy_dd: pd.Series, benchmark_dd: pd.Series) -> go.Figure:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=strategy_dd.index, y=strategy_dd.values * 100.0, mode="lines",
-        name="Strategy", line=dict(color="#EF4444", width=1.5),
-        fill="tozeroy", fillcolor="rgba(239,68,68,0.15)",
-        hovertemplate="Date: %{x}<br>Drawdown: %{y:.2f}%<extra></extra>",
-    ))
-    fig.add_trace(go.Scatter(
-        x=benchmark_dd.index, y=benchmark_dd.values * 100.0, mode="lines",
-        name="Benchmark", line=dict(color="#8C96A6", width=1.2, dash="dash"),
-        hovertemplate="Date: %{x}<br>Drawdown: %{y:.2f}%<extra></extra>",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=strategy_dd.index,
+            y=strategy_dd.values * 100.0,
+            mode="lines",
+            name="Strategy",
+            line=dict(color="#EF4444", width=1.5),
+            fill="tozeroy",
+            fillcolor="rgba(239,68,68,0.15)",
+            hovertemplate="Date: %{x}<br>Drawdown: %{y:.2f}%<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=benchmark_dd.index,
+            y=benchmark_dd.values * 100.0,
+            mode="lines",
+            name="Benchmark",
+            line=dict(color="#8C96A6", width=1.2, dash="dash"),
+            hovertemplate="Date: %{x}<br>Drawdown: %{y:.2f}%<extra></extra>",
+        )
+    )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -230,11 +242,13 @@ def main() -> None:
         st.metric("CAGR", f"{strategy_metrics['cagr'] * 100:.1f}%")
     st.sidebar.metric("Total Executed Trades", f"{total_trades}")
 
-    tab1, tab2, tab3 = st.tabs([
-        "📈 Portfolio Equity Curves",
-        "📑 Trades Auditor",
-        "🔍 Single Ticker Inspector",
-    ])
+    tab1, tab2, tab3 = st.tabs(
+        [
+            "📈 Portfolio Equity Curves",
+            "📑 Trades Auditor",
+            "🔍 Single Ticker Inspector",
+        ]
+    )
 
     with tab1:
         st.write("#### Strategy vs. Equal-Weight Buy & Hold")
@@ -244,30 +258,37 @@ def main() -> None:
         )
 
         st.write("#### Performance Summary Comparison")
-        metrics_comp = pd.DataFrame({
-            "Metric": [
-                "Initial Capital", "Ending Equity", "Total Return", "CAGR (252d)",
-                "Sharpe (252d)", "Max Drawdown", "Average Drawdown",
-            ],
-            "RSI Strategy": [
-                f"${total_init_cash:,.2f}",
-                f"${strat_final:,.2f}",
-                f"{strategy_metrics['total_return'] * 100:.2f}%",
-                f"{strategy_metrics['cagr'] * 100:.2f}%",
-                f"{strategy_metrics['sharpe_ratio']:.3f}",
-                f"{strategy_metrics['max_drawdown'] * 100:.2f}%",
-                f"{strategy_metrics['average_drawdown'] * 100:.2f}%",
-            ],
-            "Equal-Weight Buy & Hold": [
-                f"${total_init_cash:,.2f}",
-                f"${bench_final:,.2f}",
-                f"{benchmark_metrics['total_return'] * 100:.2f}%",
-                f"{benchmark_metrics['cagr'] * 100:.2f}%",
-                f"{benchmark_metrics['sharpe_ratio']:.3f}",
-                f"{benchmark_metrics['max_drawdown'] * 100:.2f}%",
-                f"{benchmark_metrics['average_drawdown'] * 100:.2f}%",
-            ],
-        })
+        metrics_comp = pd.DataFrame(
+            {
+                "Metric": [
+                    "Initial Capital",
+                    "Ending Equity",
+                    "Total Return",
+                    "CAGR (252d)",
+                    "Sharpe (252d)",
+                    "Max Drawdown",
+                    "Average Drawdown",
+                ],
+                "RSI Strategy": [
+                    f"${total_init_cash:,.2f}",
+                    f"${strat_final:,.2f}",
+                    f"{strategy_metrics['total_return'] * 100:.2f}%",
+                    f"{strategy_metrics['cagr'] * 100:.2f}%",
+                    f"{strategy_metrics['sharpe_ratio']:.3f}",
+                    f"{strategy_metrics['max_drawdown'] * 100:.2f}%",
+                    f"{strategy_metrics['average_drawdown'] * 100:.2f}%",
+                ],
+                "Equal-Weight Buy & Hold": [
+                    f"${total_init_cash:,.2f}",
+                    f"${bench_final:,.2f}",
+                    f"{benchmark_metrics['total_return'] * 100:.2f}%",
+                    f"{benchmark_metrics['cagr'] * 100:.2f}%",
+                    f"{benchmark_metrics['sharpe_ratio']:.3f}",
+                    f"{benchmark_metrics['max_drawdown'] * 100:.2f}%",
+                    f"{benchmark_metrics['average_drawdown'] * 100:.2f}%",
+                ],
+            }
+        )
         st.table(metrics_comp)
 
         st.write("#### Drawdown")
@@ -286,19 +307,19 @@ def main() -> None:
         else:
             tickers_in_trades = sorted(trades["symbol"].unique())
             default_tickers = tickers_in_trades[:5] if len(tickers_in_trades) > 5 else tickers_in_trades
-            selected_tickers = st.multiselect(
-                "Filter by Ticker Symbol(s)", tickers_in_trades, default=default_tickers
-            )
+            selected_tickers = st.multiselect("Filter by Ticker Symbol(s)", tickers_in_trades, default=default_tickers)
             filtered = trades[trades["symbol"].isin(selected_tickers)].copy()
 
             st.dataframe(
-                filtered.style.format({
-                    "entry_price": "${:,.2f}",
-                    "exit_price": "${:,.2f}",
-                    "size": "{:,.2f}",
-                    "pnl": "${:,.2f}",
-                    "return_pct": "{:.2f}%",
-                }),
+                filtered.style.format(
+                    {
+                        "entry_price": "${:,.2f}",
+                        "exit_price": "${:,.2f}",
+                        "size": "{:,.2f}",
+                        "pnl": "${:,.2f}",
+                        "return_pct": "{:.2f}%",
+                    }
+                ),
                 width=CHART_WIDTH,
             )
 
@@ -318,39 +339,77 @@ def main() -> None:
         asset_entries = (asset_rsi < 30).fillna(False)
         asset_exits = (asset_rsi > 70).fillna(False)
 
-        fig_ind = make_subplots(
-            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4]
+        fig_ind = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4])
+        fig_ind.add_trace(
+            go.Scatter(
+                x=asset_close.index,
+                y=asset_close.values,
+                mode="lines",
+                name="Close Price",
+                line=dict(color="#3B82F6", width=2),
+                hovertemplate="Price: $%{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
         )
-        fig_ind.add_trace(go.Scatter(
-            x=asset_close.index, y=asset_close.values, mode="lines", name="Close Price",
-            line=dict(color="#3B82F6", width=2),
-            hovertemplate="Price: $%{y:,.2f}<extra></extra>",
-        ), row=1, col=1)
 
-        fig_ind.add_trace(go.Scatter(
-            x=asset_close.index[asset_entries], y=asset_close.values[asset_entries],
-            mode="markers", name="Buy (RSI < 30)",
-            marker=dict(symbol="triangle-up", color="#10B981", size=11, line=dict(color="white", width=1)),
-            hovertemplate="Buy Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
-        ), row=1, col=1)
+        fig_ind.add_trace(
+            go.Scatter(
+                x=asset_close.index[asset_entries],
+                y=asset_close.values[asset_entries],
+                mode="markers",
+                name="Buy (RSI < 30)",
+                marker=dict(symbol="triangle-up", color="#10B981", size=11, line=dict(color="white", width=1)),
+                hovertemplate="Buy Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
 
-        fig_ind.add_trace(go.Scatter(
-            x=asset_close.index[asset_exits], y=asset_close.values[asset_exits],
-            mode="markers", name="Sell (RSI > 70)",
-            marker=dict(symbol="triangle-down", color="#EF4444", size=11, line=dict(color="white", width=1)),
-            hovertemplate="Sell Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
-        ), row=1, col=1)
+        fig_ind.add_trace(
+            go.Scatter(
+                x=asset_close.index[asset_exits],
+                y=asset_close.values[asset_exits],
+                mode="markers",
+                name="Sell (RSI > 70)",
+                marker=dict(symbol="triangle-down", color="#EF4444", size=11, line=dict(color="white", width=1)),
+                hovertemplate="Sell Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
 
-        fig_ind.add_trace(go.Scatter(
-            x=asset_rsi.index, y=asset_rsi.values, mode="lines", name="RSI (14)",
-            line=dict(color="#F59E0B", width=1.5),
-            hovertemplate="RSI Value: %{y:.2f}<extra></extra>",
-        ), row=2, col=1)
+        fig_ind.add_trace(
+            go.Scatter(
+                x=asset_rsi.index,
+                y=asset_rsi.values,
+                mode="lines",
+                name="RSI (14)",
+                line=dict(color="#F59E0B", width=1.5),
+                hovertemplate="RSI Value: %{y:.2f}<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
 
-        fig_ind.add_hline(y=70, line_dash="dash", line_color="#EF4444", row=2, col=1,
-                          annotation_text="Overbought (70)", annotation_position="top left")
-        fig_ind.add_hline(y=30, line_dash="dash", line_color="#10B981", row=2, col=1,
-                          annotation_text="Oversold (30)", annotation_position="bottom left")
+        fig_ind.add_hline(
+            y=70,
+            line_dash="dash",
+            line_color="#EF4444",
+            row=2,
+            col=1,
+            annotation_text="Overbought (70)",
+            annotation_position="top left",
+        )
+        fig_ind.add_hline(
+            y=30,
+            line_dash="dash",
+            line_color="#10B981",
+            row=2,
+            col=1,
+            annotation_text="Oversold (30)",
+            annotation_position="bottom left",
+        )
 
         fig_ind.update_layout(
             paper_bgcolor="rgba(0,0,0,0)",

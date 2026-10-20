@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 # Paths
@@ -15,9 +14,21 @@ DEFAULT_START_DATE = "2024-01-01"
 
 # A representative subset of S&P 500 for testing or quick ingestion
 DEFAULT_TICKERS = [
-    "AAPL", "MSFT", "AMZN", "GOOGL", "META", 
-    "TSLA", "NVDA", "JPM", "V", "PG",
-    "UNH", "HD", "DIS", "PYPL", "NFLX"
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "GOOGL",
+    "META",
+    "TSLA",
+    "NVDA",
+    "JPM",
+    "V",
+    "PG",
+    "UNH",
+    "HD",
+    "DIS",
+    "PYPL",
+    "NFLX",
 ]
 
 # S&P 500 Tickers Source URL (Wikipedia is standard)
@@ -28,9 +39,7 @@ LOGGING_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "standard": {
-            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-        },
+        "standard": {"format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s"},
     },
     "handlers": {
         "console": {

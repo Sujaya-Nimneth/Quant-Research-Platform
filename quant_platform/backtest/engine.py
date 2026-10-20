@@ -1,5 +1,5 @@
-import logging
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -125,8 +125,7 @@ class BacktestEngine:
                 "win_rate_pct": win_rate * 100.0,
             },
             "equity_curve": [
-                {"date": index.strftime("%Y-%m-%d"), "value": safe_float(value)}
-                for index, value in equity.items()
+                {"date": index.strftime("%Y-%m-%d"), "value": safe_float(value)} for index, value in equity.items()
             ],
             "trades": trade_logs,
         }
@@ -164,16 +163,18 @@ class BacktestEngine:
             else:
                 exit_date = str(exit_date).split(" ")[0]
 
-            trade_logs.append({
-                "symbol": str(symbol),
-                "entry_date": entry_date,
-                "exit_date": exit_date,
-                "entry_price": safe_float(row.get("Avg Entry Price", row.get("Entry Price"))),
-                "exit_price": safe_float(row.get("Avg Exit Price", row.get("Exit Price"))),
-                "size": safe_float(row.get("Size")),
-                "pnl": safe_float(row.get("PnL")),
-                "return_pct": safe_float(row.get("Return")) * 100.0,
-            })
+            trade_logs.append(
+                {
+                    "symbol": str(symbol),
+                    "entry_date": entry_date,
+                    "exit_date": exit_date,
+                    "entry_price": safe_float(row.get("Avg Entry Price", row.get("Entry Price"))),
+                    "exit_price": safe_float(row.get("Avg Exit Price", row.get("Exit Price"))),
+                    "size": safe_float(row.get("Size")),
+                    "pnl": safe_float(row.get("PnL")),
+                    "return_pct": safe_float(row.get("Return")) * 100.0,
+                }
+            )
 
         return trade_logs
 

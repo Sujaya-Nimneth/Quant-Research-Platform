@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 import duckdb
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -47,16 +46,18 @@ def price_frame() -> pd.DataFrame:
             # Deterministic pseudo-random walk.
             price *= 1.0 + 0.004 * math.sin(i / 3.0) + 0.001 * math.cos(i / 7.0)
             day = start + dt.timedelta(days=i)
-            rows.append({
-                "symbol": symbol,
-                "date": day,
-                "open": price * 0.995,
-                "high": price * 1.01,
-                "low": price * 0.99,
-                "close": price + offset,
-                "adj_close": price + offset,
-                "volume": 1_000_000 + i,
-            })
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "date": day,
+                    "open": price * 0.995,
+                    "high": price * 1.01,
+                    "low": price * 0.99,
+                    "close": price + offset,
+                    "adj_close": price + offset,
+                    "volume": 1_000_000 + i,
+                }
+            )
     return pd.DataFrame(rows)
 
 

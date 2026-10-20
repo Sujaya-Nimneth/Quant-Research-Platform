@@ -125,7 +125,7 @@ class IngestionPipeline:
         with get_db_connection(read_only=False) as conn:
             total_written = 0
             for start in range(0, len(df), self.batch_size):
-                batch = df.iloc[start:start + self.batch_size]
+                batch = df.iloc[start : start + self.batch_size]
                 conn.register("batch_df", batch)
                 try:
                     conn.execute("BEGIN TRANSACTION")

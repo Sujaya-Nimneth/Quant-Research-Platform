@@ -98,8 +98,7 @@ def test_failing_signal_does_not_wipe_existing_columns(populated_db):
 
     conn = duckdb.connect(str(populated_db), read_only=True)
     before = conn.execute(
-        "SELECT symbol, date, rsi, volatility_15d FROM signals "
-        "WHERE rsi IS NOT NULL ORDER BY symbol, date LIMIT 5"
+        "SELECT symbol, date, rsi, volatility_15d FROM signals WHERE rsi IS NOT NULL ORDER BY symbol, date LIMIT 5"
     ).fetchall()
     conn.close()
     assert before, "the baseline pipeline must produce populated rows"
@@ -109,8 +108,7 @@ def test_failing_signal_does_not_wipe_existing_columns(populated_db):
 
     conn = duckdb.connect(str(populated_db), read_only=True)
     after = conn.execute(
-        "SELECT symbol, date, rsi, volatility_15d FROM signals "
-        "WHERE rsi IS NOT NULL ORDER BY symbol, date LIMIT 5"
+        "SELECT symbol, date, rsi, volatility_15d FROM signals WHERE rsi IS NOT NULL ORDER BY symbol, date LIMIT 5"
     ).fetchall()
     conn.close()
 

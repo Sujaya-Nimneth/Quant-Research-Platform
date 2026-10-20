@@ -75,9 +75,7 @@ class SignalFactory:
                 try:
                     self.register(cls())
                 except Exception as inst_err:
-                    logger.error(
-                        "Could not instantiate %s from %s: %s", cls.__name__, module_name, inst_err
-                    )
+                    logger.error("Could not instantiate %s from %s: %s", cls.__name__, module_name, inst_err)
 
     def compute_all(self, price_df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -92,16 +90,16 @@ class SignalFactory:
         for symbol, group in price_df.groupby("symbol"):
             symbol_df = group.sort_values("date").copy()
 
-            symbol_features_df = pd.DataFrame({
-                "symbol": symbol_df["symbol"],
-                "date": symbol_df["date"],
-            })
+            symbol_features_df = pd.DataFrame(
+                {
+                    "symbol": symbol_df["symbol"],
+                    "date": symbol_df["date"],
+                }
+            )
 
             for signal_name, signal in self._signals.items():
                 try:
-                    missing_cols = [
-                        c for c in signal.required_columns if c not in symbol_df.columns
-                    ]
+                    missing_cols = [c for c in signal.required_columns if c not in symbol_df.columns]
                     if missing_cols:
                         logger.warning(
                             "Ticker %s missing columns %s required by %s. Skipping signal.",
@@ -112,20 +110,17 @@ class SignalFactory:
                         continue
 
                     computed_signal = signal.compute(symbol_df)
-                    computed_signal = self._validate_signal_output(
-                        signal_name, symbol, computed_signal, len(symbol_df)
-                    )
+                    computed_signal = self._validate_signal_output(signal_name, symbol, computed_signal, len(symbol_df))
 
                     # Suffix duplicate columns instead of silently renaming them
                     # to _x/_y, which would hide two signals fighting for a name.
                     overlap = [
-                        c for c in computed_signal.columns
+                        c
+                        for c in computed_signal.columns
                         if c in symbol_features_df.columns and c not in {"symbol", "date"}
                     ]
                     if overlap:
-                        raise ValueError(
-                            f"columns {overlap} already produced by another signal"
-                        )
+                        raise ValueError(f"columns {overlap} already produced by another signal")
 
                     symbol_features_df = pd.merge(
                         symbol_features_df,
@@ -163,19 +158,14 @@ class SignalFactory:
             raise ValueError(f"{signal_name} output missing key columns {missing_keys}")
 
         if len(computed) != expected_rows:
-            raise ValueError(
-                f"{signal_name} returned {len(computed)} rows for {symbol}, expected {expected_rows}"
-            )
+            raise ValueError(f"{signal_name} returned {len(computed)} rows for {symbol}, expected {expected_rows}")
 
         return computed
 
     @staticmethod
     def _feature_columns(features_df: pd.DataFrame) -> list[str]:
         """Feature columns to persist, excluding keys and reserved metadata."""
-        return [
-            c for c in features_df.columns
-            if c not in RESERVED_COLUMNS
-        ]
+        return [c for c in features_df.columns if c not in RESERVED_COLUMNS]
 
     @staticmethod
     def _quote_identifier(name: str) -> str:
@@ -230,8 +220,7 @@ class SignalFactory:
                 total_rows = conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
 
             logger.info(
-                "Successfully computed and saved features. "
-                "Rows written: %d. Total rows in 'signals': %d",
+                "Successfully computed and saved features. Rows written: %d. Total rows in 'signals': %d",
                 written,
                 total_rows,
             )
@@ -248,9 +237,7 @@ class SignalFactory:
         for col in feature_cols:
             if col not in db_col_names:
                 logger.info("Database Migration: adding column '%s' to 'signals'.", col)
-                conn.execute(
-                    f"ALTER TABLE signals ADD COLUMN {self._quote_identifier(col)} DOUBLE"
-                )
+                conn.execute(f"ALTER TABLE signals ADD COLUMN {self._quote_identifier(col)} DOUBLE")
 
     def _upsert_features(self, conn, features_df: pd.DataFrame, feature_cols: list[str]) -> int:
         """Insert new keys and update existing ones.
@@ -266,14 +253,10 @@ class SignalFactory:
 
             conn.execute("BEGIN TRANSACTION")
 
-            update_cols = [
-                c for c in feature_cols
-                if c not in key_cols
-            ]
+            update_cols = [c for c in feature_cols if c not in key_cols]
             if update_cols:
                 assignments = ", ".join(
-                    f"{self._quote_identifier(c)} = src.{self._quote_identifier(c)}"
-                    for c in update_cols
+                    f"{self._quote_identifier(c)} = src.{self._quote_identifier(c)}" for c in update_cols
                 )
                 conn.execute(f"""
                     UPDATE signals AS dst

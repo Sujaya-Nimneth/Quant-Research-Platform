@@ -26,9 +26,7 @@ class BaseStrategy(ABC):
         pass
 
     @abstractmethod
-    def generate_signals(
-        self, data_dict: dict[str, pd.DataFrame]
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def generate_signals(self, data_dict: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Generates entry (buy) and exit (sell) signal masks.
 
@@ -60,10 +58,7 @@ class RSIStrategy(BaseStrategy):
 
     def __init__(self, entry_threshold: float = 30.0, exit_threshold: float = 70.0):
         if entry_threshold >= exit_threshold:
-            raise ValueError(
-                f"entry_threshold ({entry_threshold}) must be below "
-                f"exit_threshold ({exit_threshold})."
-            )
+            raise ValueError(f"entry_threshold ({entry_threshold}) must be below exit_threshold ({exit_threshold}).")
         self.entry_threshold = entry_threshold
         self.exit_threshold = exit_threshold
 
@@ -75,9 +70,7 @@ class RSIStrategy(BaseStrategy):
     def required_indicators(self) -> list[str]:
         return ["rsi"]
 
-    def generate_signals(
-        self, data_dict: dict[str, pd.DataFrame]
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def generate_signals(self, data_dict: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Generates entry and exit signals for RSI.
         """
