@@ -1,11 +1,25 @@
+import numpy as np
 import pandas as pd
+
 from quant_platform.features.base import BaseSignal
+
 
 class VolatilitySignal(BaseSignal):
     """
-    Computes custom close price volatility ratio over a rolling 15-day window.
+    Computes a rolling close-price volatility ratio.
+
+    Two variants are produced so both the "dispersion" and the "normalised"
+    views are available:
+
+    * ``volatility_15d``     - 15-day rolling standard deviation of close.
+    * ``volatility_ratio_15d`` - that standard deviation divided by close.
     """
-    
+
+    def __init__(self, window: int = 15):
+        if window < 2:
+            raise ValueError("window must be at least 2 to compute a standard deviation.")
+        self._window = window
+
     @property
     def name(self) -> str:
         return "custom_volatility"
@@ -16,16 +30,15 @@ class VolatilitySignal(BaseSignal):
 
     def compute(self, data: pd.DataFrame) -> pd.DataFrame:
         df = data.sort_values("date").copy()
-        
+
         result_df = pd.DataFrame({
             "symbol": df["symbol"],
-            "date": df["date"]
+            "date": df["date"],
         })
-        
-        # Calculate 15-day rolling volatility
-        rolling_std = df["close"].rolling(window=15).std()
-        
-        # Calculate volatility ratio
-        result_df["volatility_15d"] = rolling_std / df["close"]
-        
+
+        rolling_std = df["close"].rolling(window=self._window).std()
+
+        result_df["volatility_15d"] = rolling_std
+        result_df["volatility_ratio_15d"] = rolling_std / df["close"].replace(0, np.nan)
+
         return result_df
