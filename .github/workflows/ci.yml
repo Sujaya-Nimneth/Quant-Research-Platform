@@ -21,25 +21,27 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
-      - name: Install dependencies
+      - name: Verify dependency resolution
+        # vectorbt 1.1+ needs numpy>=2.4.6 and pandas>=3.0.3. A looser pin makes
+        # pip backtrack into an unsolvable conflict, so fail here with a clear
+        # message instead of burying it in the install log.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install --dry-run -r requirements.txt \
+            || { echo "::error::requirements.txt does not resolve on Python ${{ matrix.python-version }}"; exit 1; }
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
 
       - name: Lint
         run: ruff check quant_platform tests
 
-      - name: Run tests
-        run: pytest -q
-
-  lint-format:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: pip install ruff
       - name: Check formatting
         run: ruff format --check quant_platform tests
+
+      - name: Run tests
+        run: pytest -q
