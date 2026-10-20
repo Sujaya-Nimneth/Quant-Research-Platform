@@ -1,13 +1,14 @@
 # Runtime dependencies.
 #
-# Upper bounds are intentional: this project is validated against the versions
-# below and vectorbt's API has changed across major releases (for example
-# `year_freq` was removed in 1.x).
+# vectorbt 1.1+ requires numpy>=2.4.6 and pandas>=3.0.3, which in turn need
+# Python 3.11+. The bounds below are the ones CI actually resolves; loosening
+# pandas to <3 makes pip backtrack to pandas 2.x and fail with an
+# unsolvable numpy conflict.
 
 duckdb>=1.1.0,<2
 yfinance>=0.2.40,<2
-pandas>=2.0.0,<3
-numpy>=1.24.0,<3
+pandas>=3.0.3,<4
+numpy>=2.4.6,<3
 pyarrow>=12.0.0,<22
 tqdm>=4.65.0,<5
 vectorbt>=1.1.0,<2
