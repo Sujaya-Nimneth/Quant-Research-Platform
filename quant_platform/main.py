@@ -42,7 +42,9 @@ def handle_ingest(args):
         rows_ingested = pipeline.run(
             tickers=tickers,
             start_date=args.start_date,
-            end_date=args.end_date
+            end_date=args.end_date,
+            full_refresh=args.full_refresh,
+            strict_tickers=args.strict_tickers,
         )
         logger.info(f"Ingestion process completed. Total new rows downloaded: {rows_ingested}")
     except Exception as e:
@@ -188,9 +190,19 @@ def main():
         help="End date in YYYY-MM-DD format (default: today)"
     )
     ingest_parser.add_argument(
-        "--test", 
-        action="store_true", 
+        "--test",
+        action="store_true",
         help="Ingest only a small representative test subset of tickers (faster)"
+    )
+    ingest_parser.add_argument(
+        "--full-refresh",
+        action="store_true",
+        help="Re-download the entire history instead of only new sessions (default: incremental)"
+    )
+    ingest_parser.add_argument(
+        "--strict-tickers",
+        action="store_true",
+        help="Fail if the S&P 500 constituent list cannot be fetched instead of using the 15-ticker default"
     )
     
     # 2. Features Command
