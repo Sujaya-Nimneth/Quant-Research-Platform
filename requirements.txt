@@ -1,9 +1,18 @@
-duckdb>=1.1.0
-yfinance>=0.2.40
-pandas>=2.0.0
-numpy>=1.24.0
-pyarrow>=12.0.0
-tqdm>=4.65.0
-vectorbt>=0.25.0
-streamlit>=1.20.0
-plotly>=5.15.0
+# Runtime dependencies.
+#
+# Upper bounds are intentional: this project is validated against the versions
+# below and vectorbt's API has changed across major releases (for example
+# `year_freq` was removed in 1.x).
+
+duckdb>=1.1.0,<2
+yfinance>=0.2.40,<2
+pandas>=2.0.0,<3
+numpy>=1.24.0,<3
+pyarrow>=12.0.0,<22
+tqdm>=4.65.0,<5
+vectorbt>=1.1.0,<2
+streamlit>=1.40.0,<2
+plotly>=5.15.0,<7
+
+# Required by pandas.read_html for S&P 500 ticker discovery.
+lxml>=5.0.0,<7
