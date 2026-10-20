@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
+
 import pandas as pd
+
 
 class BaseStrategy(ABC):
     """
@@ -12,8 +14,21 @@ class BaseStrategy(ABC):
     def name(self) -> str:
         pass
 
+    @property
     @abstractmethod
-    def generate_signals(self, data_dict: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def required_indicators(self) -> list[str]:
+        """
+        Names of the `signals` table columns this strategy needs.
+
+        The backtest engine uses this to load only the required columns, so a
+        new strategy does not need to know anything about the storage layer.
+        """
+        pass
+
+    @abstractmethod
+    def generate_signals(
+        self, data_dict: dict[str, pd.DataFrame]
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Generates entry (buy) and exit (sell) signal masks.
 
@@ -32,14 +47,23 @@ class BaseStrategy(ABC):
         """
         pass
 
+
 class RSIStrategy(BaseStrategy):
     """
     Mean-reversion strategy based on the Relative Strength Index (RSI).
-    - Buy (Entry) when RSI cross below or is below lower threshold (default: 30)
-    - Sell (Exit) when RSI crosses above or is above upper threshold (default: 70)
+    - Buy (Entry) when RSI is below the lower threshold (default: 30)
+    - Sell (Exit) when RSI is above the upper threshold (default: 70)
+
+    Signals are evaluated on a bar's close and therefore executed on the *next*
+    bar. See `BacktestEngine.run` for the shift.
     """
 
     def __init__(self, entry_threshold: float = 30.0, exit_threshold: float = 70.0):
+        if entry_threshold >= exit_threshold:
+            raise ValueError(
+                f"entry_threshold ({entry_threshold}) must be below "
+                f"exit_threshold ({exit_threshold})."
+            )
         self.entry_threshold = entry_threshold
         self.exit_threshold = exit_threshold
 
@@ -47,17 +71,23 @@ class RSIStrategy(BaseStrategy):
     def name(self) -> str:
         return f"RSI_Strategy_{int(self.entry_threshold)}_{int(self.exit_threshold)}"
 
-    def generate_signals(self, data_dict: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    @property
+    def required_indicators(self) -> list[str]:
+        return ["rsi"]
+
+    def generate_signals(
+        self, data_dict: dict[str, pd.DataFrame]
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Generates entry and exit signals for RSI.
         """
         if "rsi" not in data_dict:
             raise ValueError("RSI strategy requires 'rsi' DataFrame in the data dictionary.")
-            
+
         rsi = data_dict["rsi"]
-        
-        # Sells when RSI is above exit threshold
-        entries = rsi < self.entry_threshold
-        exits = rsi > self.exit_threshold
-        
+
+        # A NaN RSI (warmup window) must never trigger a trade.
+        entries = (rsi < self.entry_threshold).fillna(False).astype(bool)
+        exits = (rsi > self.exit_threshold).fillna(False).astype(bool)
+
         return entries, exits
