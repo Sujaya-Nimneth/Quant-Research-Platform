@@ -11,6 +11,7 @@ import logging
 
 import pandas as pd
 
+from quant_platform import config
 from quant_platform.db.connection import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,13 @@ def table_exists(conn, table_name: str) -> bool:
 
 def require_tables() -> None:
     """Raise a helpful error if the ingestion/feature pipelines have not run."""
+    if not config.DB_PATH.exists():
+        raise ValueError(
+            f"Database not found at {config.DB_PATH}. "
+            "Run `python -m quant_platform.main ingest --test` followed by "
+            "`python -m quant_platform.main features` first."
+        )
+
     with get_db_connection(read_only=True) as conn:
         missing = [t for t in (PRICE_TABLE, SIGNAL_TABLE) if not table_exists(conn, t)]
     if missing:
