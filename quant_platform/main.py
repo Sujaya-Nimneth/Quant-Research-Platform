@@ -1,7 +1,13 @@
 import logging.config
 import argparse
 import sys
-from quant_platform.config import LOGGING_CONFIG, DEFAULT_START_DATE
+from quant_platform.config import (
+    BACKTEST_RESULTS_PATH,
+    DEFAULT_EXECUTION_DELAY,
+    DEFAULT_FEE,
+    DEFAULT_START_DATE,
+    LOGGING_CONFIG,
+)
 from quant_platform.db.connection import get_db_connection
 from quant_platform.ingestion.yfinance_fetcher import YFinanceFetcher
 from quant_platform.ingestion.pipeline import IngestionPipeline
@@ -102,10 +108,15 @@ def handle_status(args):
             signals_count = conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
             signals_cols = conn.execute("PRAGMA table_info('signals')").fetchall()
             col_names = [row[1] for row in signals_cols]
-            
+
+            # Metadata columns are excluded by name, not by position: signal
+            # modules can add columns at any time via schema migration.
+            metadata_cols = {"symbol", "date", "calculated_at"}
+            feature_cols = [c for c in col_names if c not in metadata_cols]
+
             print("Table: signals")
             print(f"  - Total features records: {signals_count:,}")
-            print(f"  - Computed Alpha features: {', '.join(col_names[2:-1])}")  # skip symbol, date, calculated_at
+            print(f"  - Computed Alpha features: {', '.join(feature_cols)}")
             
             # Print a few rows of sample calculated features
             sample_features = conn.execute(
@@ -140,10 +151,11 @@ def handle_backtest(args):
     # 2. Instantiate and run Backtest Engine
     try:
         from quant_platform.backtest.engine import BacktestEngine
-        engine = BacktestEngine(strategy)
+        engine = BacktestEngine(strategy, execution_delay=args.execution_delay)
         engine.run(
             init_cash=args.init_cash,
             fee=args.fee,
+            slippage=args.slippage,
             output_path=args.output
         )
     except Exception as e:
@@ -200,19 +212,34 @@ def main():
         "--init-cash",
         type=float,
         default=10000.0,
-        help="Initial capital in cash (default: 10000.0)"
+        help="Total initial capital in cash, split across symbols (default: 10000.0)"
     )
     backtest_parser.add_argument(
         "--fee",
         type=float,
-        default=0.001,
-        help="Transaction fee per trade as a fraction (default: 0.001, i.e. 10 bps)"
+        default=DEFAULT_FEE,
+        help=f"Transaction fee per trade as a fraction (default: {DEFAULT_FEE}, i.e. 10 bps)"
+    )
+    backtest_parser.add_argument(
+        "--slippage",
+        type=float,
+        default=0.0,
+        help="Slippage per trade as a fraction (default: 0.0)"
+    )
+    backtest_parser.add_argument(
+        "--execution-delay",
+        type=int,
+        default=DEFAULT_EXECUTION_DELAY,
+        help=(
+            "Bars to wait before filling a signal (default: "
+            f"{DEFAULT_EXECUTION_DELAY}). Must be >= 1 to avoid look-ahead bias."
+        )
     )
     backtest_parser.add_argument(
         "--output",
         type=str,
-        default="data/backtest_results.json",
-        help="Target JSON path to export trade logs & statistics (default: data/backtest_results.json)"
+        default=str(BACKTEST_RESULTS_PATH),
+        help=f"Target JSON path to export trade logs & statistics (default: {BACKTEST_RESULTS_PATH})"
     )
     backtest_parser.add_argument(
         "--rsi-entry",
