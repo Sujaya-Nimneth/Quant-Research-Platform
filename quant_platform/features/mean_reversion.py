@@ -1,12 +1,18 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from quant_platform.features.base import BaseSignal
+
 
 class MeanReversionSignals(BaseSignal):
     """
     Computes two standard mean-reversion indicators:
-    1. RSI (Relative Strength Index): 14-period standard index.
+    1. RSI (Relative Strength Index): 14-period, Wilder's smoothing.
     2. Bollinger Bands: 20-period standard deviation bands and %B.
+
+    Values inside the rolling warmup window are left as NaN. Emitting a
+    placeholder (100 for RSI, 0.5 for %B) would look like a real signal and
+    generate trades before the indicator has enough history to be meaningful.
     """
 
     def __init__(self, rsi_period: int = 14, bb_period: int = 20, bb_std: float = 2.0):
@@ -27,54 +33,83 @@ class MeanReversionSignals(BaseSignal):
         Computes RSI and Bollinger Bands for the given pricing DataFrame.
         Expected input DataFrame contains: ['symbol', 'date', 'close']
         """
-        # Ensure data is sorted by date
         df = data.sort_values("date").copy()
-        
+
         result_df = pd.DataFrame({
             "symbol": df["symbol"],
-            "date": df["date"]
+            "date": df["date"],
         })
 
         close = df["close"]
 
-        # 1. RSI (Relative Strength Index) using Wilder's EMA smoothing technique
-        delta = close.diff()
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-        
-        # Wilder's smoothing is equivalent to an exponential moving average with alpha = 1 / period
-        # ewm(alpha=1/period, adjust=False) is standard for wilder's
-        alpha = 1.0 / self._rsi_period
-        avg_gain = gain.ewm(alpha=alpha, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=alpha, adjust=False).mean()
-        
-        # We need to seed the first value with SMA, but yfinance standard ewm already handles initial values gracefully.
-        # Avoid division by zero
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        rsi = 100 - (100 / (1 + rs))
-        
-        # If avg_loss was 0, RSI should be 100 if avg_gain > 0, else 50
-        rsi = rsi.fillna(100.0)
-        # Ensure first period is NaN since diff is NaN
-        rsi.iloc[0] = np.nan
-        
-        result_df["rsi"] = rsi
+        result_df["rsi"] = self._rsi(close)
 
-        # 2. Bollinger Bands (20-day Simple Moving Average +/- 2 Standard Deviations)
+        # Bollinger Bands (20-day SMA +/- 2 standard deviations)
         sma = close.rolling(window=self._bb_period).mean()
         std = close.rolling(window=self._bb_period).std()
-        
+
         bb_upper = sma + (self._bb_std * std)
         bb_lower = sma - (self._bb_std * std)
-        
-        # %B indicates where the price is relative to the bands
-        # Avoid division by zero
-        band_diff = bb_upper - bb_lower
-        bb_percent = (close - bb_lower) / band_diff.replace(0, np.nan)
-        bb_percent = bb_percent.fillna(0.5)  # Default if bands collapse to zero
+
+        # %B: where price sits relative to the bands. A zero-width band (flat
+        # price) is genuinely undefined, so leave it NaN instead of guessing.
+        band_width = bb_upper - bb_lower
+        bb_percent = (close - bb_lower) / band_width.replace(0, np.nan)
 
         result_df["bb_upper"] = bb_upper
         result_df["bb_lower"] = bb_lower
         result_df["bb_percent"] = bb_percent
 
         return result_df
+
+    def _rsi(self, close: pd.Series) -> pd.Series:
+        """Wilder's RSI.
+
+        The first average gain/loss is a simple mean of the first `period`
+        deltas; subsequent values use Wilder's recursive smoothing
+        (equivalent to an EMA with alpha = 1/period). The result is NaN until
+        a full window is available.
+        """
+        period = self._rsi_period
+        delta = close.diff()
+
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+
+        # Seed with the SMA of the first `period` observations.
+        avg_gain = gain.rolling(window=period, min_periods=period).mean()
+        avg_loss = loss.rolling(window=period, min_periods=period).mean()
+
+        seeded_gain = avg_gain.copy()
+        seeded_loss = avg_loss.copy()
+
+        # Wilder smoothing over the remaining observations. The first smoothed
+        # value sits at index `period` (from the rolling seed); recursion starts
+        # one bar later so it has a valid predecessor.
+        gain_values = gain.to_numpy(dtype=float)
+        loss_values = loss.to_numpy(dtype=float)
+        alpha = 1.0 / period
+
+        for i in range(period + 1, len(close)):
+            prev_gain = seeded_gain.iloc[i - 1]
+            prev_loss = seeded_loss.iloc[i - 1]
+            if np.isnan(prev_gain) or np.isnan(prev_loss):
+                continue
+            if np.isnan(gain_values[i]) or np.isnan(loss_values[i]):
+                continue
+            seeded_gain.iloc[i] = prev_gain + alpha * (gain_values[i] - prev_gain)
+            seeded_loss.iloc[i] = prev_loss + alpha * (loss_values[i] - prev_loss)
+
+        rsi = pd.Series(np.nan, index=close.index, dtype=float)
+
+        valid = seeded_gain.notna() & seeded_loss.notna()
+        # No losses at all: RSI is 100 when there are gains, 50 when flat.
+        no_loss = valid & (seeded_loss == 0)
+        rsi[no_loss & (seeded_gain > 0)] = 100.0
+        rsi[no_loss & (seeded_gain == 0)] = 50.0
+
+        normal = valid & (seeded_loss > 0)
+        rs = seeded_gain[normal] / seeded_loss[normal]
+        rsi[normal] = 100.0 - (100.0 / (1.0 + rs))
+
+        return rsi
