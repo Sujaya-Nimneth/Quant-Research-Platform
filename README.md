@@ -1,9 +1,13 @@
 # Quantitative Research Platform Core
 
-A highly modular, high-performance daily historical market data ingestion and feature engineering engine built for S&P 500 stocks. 
-This platform uses **yfinance** for data sourcing and **DuckDB** for ultra-fast, local analytics-focused data storage. 
+A modular daily market-data ingestion, feature-engineering, and vectorized
+backtesting engine for S&P 500 equities.
 
-Features a strictly object-oriented, dynamic **Signal Factory** designed to easily plug in custom pricing and alpha signals with automatic schema migration.
+Data is sourced with **yfinance** and stored in **DuckDB**. Signals are
+auto-discovered from the `quant_platform/features/` package, persisted to a
+feature store with automatic schema migration, and evaluated with **vectorbt**.
+A **Streamlit** dashboard presents equity curves, drawdowns, trade logs, and
+per-ticker diagnostics.
 
 ---
 
@@ -11,211 +15,303 @@ Features a strictly object-oriented, dynamic **Signal Factory** designed to easi
 
 ```mermaid
 graph TD
-    A[Yahoo Finance / Alternative API] -->|yfinance_fetcher.py| B[Ingestion Pipeline]
-    B -->|Bulk Idempotent Upsert| C[(DuckDB Local Storage)]
-    
+    A[Yahoo Finance] -->|yfinance_fetcher.py| B[Ingestion Pipeline]
+    B -->|Incremental upsert| C[(DuckDB: daily_prices)]
+
     C -->|Read price series| D[Signal Factory]
-    E[Custom Alpha Signals] -->|Auto-Discovery & Registration| D
-    
-    D -->|Calculate Momentum / Mean-Reversion| F[Feature Vectors]
-    F -->|Self-Healing DB Column Migration| G[(signals Table in DuckDB)]
+    E[Custom Alpha Signals] -->|Auto-Discovery| D
+
+    D -->|Momentum / Mean-Reversion / Volatility| F[Feature Vectors]
+    F -->|Self-healing column migration| G[(DuckDB: signals)]
+
+    G --> H[Backtest Engine]
+    C --> H
+    H -->|backtest_results.json| I[Streamlit Dashboard]
 ```
 
 ---
 
 ## ⚡ Key Technical Features
 
-1. **Strictly Modular Sourcing**: 
-   All fetchers implement `BaseFetcher` interface. Adding another ingestion source (e.g. Alpaca, Alpha Vantage, Interactive Brokers) requires writing only one class and requires zero changes to the database or storage pipelines.
-   
-2. **Local Analytical Powerhouse (DuckDB)**:
-   Utilizes DuckDB's in-memory and local vectorized query engine to perform blistering fast bulk inserts, updates, and feature retrieval. Fully idempotent structure with composite Primary Keys `(symbol, date)`.
-   
-3. **Extendable 'Signal Factory'**:
-   Utilizes Python reflection to automatically scan the `quant_platform/features/` directory and load any class subclassing `BaseSignal`. Simply drop in a new Python script to instantly incorporate your own alpha signals without altering existing code.
-   
-4. **Self-Healing Schema Migrations**:
-   When new custom signals are created, the Signal Factory automatically scans the generated columns and updates the DuckDB database schema on-the-fly (`ALTER TABLE signals ADD COLUMN ...`), ensuring your feature store is always perfectly aligned.
+1. **Modular sourcing.** All fetchers implement `BaseFetcher`. Adding another
+   provider (Alpaca, Polygon, IBKR) means writing one class; nothing in the
+   storage or feature layers changes.
+
+2. **Incremental ingestion.** Each run resumes from the most recent stored
+   session per the `daily_prices` max date rather than re-downloading the whole
+   history. `--full-refresh` overrides this. Per-symbol retries with exponential
+   backoff handle transient provider errors.
+
+3. **Extendable Signal Factory.** Drop a module into
+   `quant_platform/features/` containing a `BaseSignal` subclass and it is
+   discovered automatically — no registration or config.
+
+4. **Self-healing schema migrations.** New signal columns are added to the
+   `signals` table with `ALTER TABLE` on the fly.
+
+5. **Column-scoped upserts.** Feature writes update only the columns that were
+   actually computed, so a signal that fails for one symbol cannot null out
+   that symbol's previously valid values.
+
+6. **Bias-aware backtesting.** Signals are evaluated on a bar's close and
+   filled on the **next** bar, so a strategy cannot trade on information it
+   would not have had. Configurable via `--execution-delay`.
 
 ---
 
 ## 🚀 Getting Started
 
-### 1. Installation & Environment Setup
+### 1. Installation
 
-Clone this workspace and run:
 ```bash
-# Initialize Python virtual environment
 python3 -m venv .venv
-
-# Activate the virtual environment
 source .venv/bin/activate
 
-# Install core quantitative packages
-pip install -r requirements.txt
+pip install -r requirements.txt       # runtime
+pip install -r requirements-dev.txt   # runtime + test/lint tooling
 ```
 
-### 2. Sourcing Pricing & Volume Data
+Python 3.11+ is required.
 
-Run ingestion to fetch historical pricing and volume data.
+### 2. Ingest price data
+
 ```bash
-# Option A: Fast Test Ingestion (runs on a representative S&P 500 subset of 15 tickers)
+# Fast subset (15 representative tickers)
 python -m quant_platform.main ingest --test
 
-# Option B: Run custom list of tickers
+# Custom list
 python -m quant_platform.main ingest --tickers AAPL,MSFT,TSLA,NVDA,SPY --start-date 2023-01-01
 
-# Option C: Run full S&P 500 Ingestion (dynamically parsed from Wikipedia)
-python -m quant_platform.main ingest
+# Full S&P 500 (~503 tickers, parsed from Wikipedia)
+python -m quant_platform.main ingest --strict-tickers
 ```
 
-### 3. Running Feature Engineering & Signal Generation
+`--strict-tickers` fails loudly if the constituent list cannot be fetched.
+Without it, a failed scrape falls back to the 15-ticker default and logs a
+warning.
 
-Run the **Signal Factory** to compute MACD, ROC, SMA Momentum, RSI, and Bollinger Bands.
+Prices are requested with `auto_adjust=False`, so `adj_close` is a genuine
+split/dividend-adjusted series rather than a duplicate of `close`.
+
+### 3. Compute features
+
 ```bash
-# Calculate features for all ingested data and save to signals table
 python -m quant_platform.main features
 ```
 
-### 4. Database Diagnostics and Verification
+### 4. Inspect the database
 
-Check the database health, total records, date ranges, and view calculated feature samples:
 ```bash
 python -m quant_platform.main status
 ```
 
----
+### 5. Run a backtest
 
-## 🛠️ Adding a Custom Alpha Signal
-
-Adding a new custom signal is extremely easy. Simply create a new Python file under `quant_platform/features/` (e.g. `quant_platform/features/volatility.py`) and write a class that inherits from `BaseSignal`.
-
-Here is a complete, copy-pasteable example of adding a **Custom Volatility Signal** (historical standard deviation ratio):
-
-```python
-# Save this in quant_platform/features/volatility.py
-import pandas as pd
-from quant_platform.features.base import BaseSignal
-
-class VolatilitySignal(BaseSignal):
-    """
-    Computes custom close price volatility ratio over a rolling 21-day window.
-    """
-    
-    @property
-    def name(self) -> str:
-        # Unique identifier used to track this group of signals
-        return "custom_volatility"
-
-    @property
-    def required_columns(self) -> list[str]:
-        # Only require the Close column from daily_prices
-        return ["close"]
-
-    def compute(self, data: pd.DataFrame) -> pd.DataFrame:
-        # Data is sorted chronologically and represents ONE symbol
-        df = data.sort_values("date").copy()
-        
-        # Output DataFrame MUST contain 'symbol' and 'date' to align
-        result_df = pd.DataFrame({
-            "symbol": df["symbol"],
-            "date": df["date"]
-        })
-        
-        # Calculate 21-day rolling volatility
-        rolling_std = df["close"].rolling(window=21).std()
-        
-        # Calculate close price ratio
-        result_df["volatility_21d"] = rolling_std / df["close"]
-        
-        return result_df
-```
-
-Once you save this file, the **Signal Factory** will:
-1. Dynamically discover `VolatilitySignal` upon startup.
-2. Calculate `volatility_21d` for all symbols.
-3. Automatically execute an on-the-fly database migration to append the new `volatility_21d` column to the `signals` table in DuckDB.
-4. Save the results! No configuration files or database updates are required.
-
----
-
-## 📈 Standard Calculated Indicators
-
-| Indicator Group | Feature Column | Technical Definition |
-|---|---|---|
-| **Momentum** | `macd_line` | EMA(Close, 12) - EMA(Close, 26) |
-| **Momentum** | `macd_signal`| EMA(MACD, 9) |
-| **Momentum** | `macd_hist`  | MACD Line - MACD Signal Line |
-| **Momentum** | `roc`        | N-Period Price Rate of Change (12 days) |
-| **Momentum** | `momentum`   | Ratio of Close to its 10-period SMA |
-| **Mean Reversion** | `rsi`        | Relative Strength Index (14 days, Wilder's smoothing) |
-| **Mean Reversion** | `bb_upper`   | Bollinger Band Upper: SMA(20) + 2 * StdDev(20) |
-| **Mean Reversion** | `bb_lower`   | Bollinger Band Lower: SMA(20) - 2 * StdDev(20) |
-| **Mean Reversion** | `bb_percent` | Bollinger %B: (Close - Lower) / (Upper - Lower) |
-
----
-
-## 📈 Portfolio Backtester Module
-
-The platform integrates a vector-backed portfolio simulation module utilizing `vectorbt`. It aligns our clean historical pricing database with generated RSI mean-reversion signals and models execution parameters.
-
-### Running a Backtest Simulation
-Simulate a multi-symbol portfolio with trading fees (10 bps):
 ```bash
-python -m quant_platform.main backtest --strategy rsi --init-cash 10000.0 --fee 0.001 --output data/backtest_results.json
+python -m quant_platform.main backtest \
+    --strategy rsi \
+    --init-cash 10000.0 \
+    --fee 0.001 \
+    --output data/backtest_results.json
 ```
 
-**Results printed to console (Tear Sheet)**:
+Example tear sheet:
+
 ```
 ==================================================
           VECTORBT PERFORMANCE TEAR SHEET
 ==================================================
 Strategy Name:      RSI_Strategy_30_70
+Execution Delay:    1 bar(s)
 Initial Capital:    $10,000.00
-Final Equity:       $13,661.89
-Total Return:       36.62%
-Annualized Return:  19.77%
-Max Drawdown:       24.51%
-Sharpe Ratio:       0.8796
-Total Trades Run:   49
-Win Rate:           83.89%
+Final Equity:       $13,143.84
+Total Return:       31.44%
+Annualized Return:  10.33%
+Max Drawdown:       10.57%
+Sharpe Ratio:       1.0185
+Sortino Ratio:      1.3936
+Total Trades Run:   44
+Win Rate:           81.82%
 ==================================================
 ```
-*Note: High-fidelity trade records and summary parameters are exported autonomously to `data/backtest_results.json`.*
 
----
+`--init-cash` is **total** portfolio capital, split evenly across symbols so
+diversification is preserved.
 
-## 🖥️ Streamlit Interactive Analytics Dashboard
+### 6. Launch the dashboard
 
-A premium interactive dashboard built to visualize historical returns, benchmark comparisons, trade logs, and indicator markers.
-
-### Launching the Dashboard locally:
-Ensure dependencies are active and run:
 ```bash
 streamlit run quant_platform/app.py
 ```
-*The browser opens automatically on `http://localhost:8501`.*
 
-### Dashboard Tabs:
-1. **Portfolio Equity Curves**: Compare the **RSI Strategy's Cumulative Return** directly against an equally weighted **Buy-and-Hold S&P 500 Benchmark** computed dynamically from DuckDB.
-2. **Trades Auditor**: A filterable datatable containing audit records of every trade (entry/exit dates, prices, fees, trade returns).
-3. **Single Ticker Inspector**: Select a symbol (e.g. `AAPL`) to overlay pricing with green/red buy/sell execution markers and review its corresponding RSI threshold oscillations.
+Tabs:
+
+1. **Portfolio Equity Curves** — strategy vs. an equal-weight buy-and-hold
+   benchmark over the same universe and capital, plus a drawdown chart.
+2. **Trades Auditor** — filterable trade log with win/loss statistics.
+3. **Single Ticker Inspector** — price with buy/sell markers and the RSI panel.
+
+The dashboard reads `data/backtest_results.json` rather than re-simulating on
+every rerun, and never holds a long-lived database connection.
 
 ---
 
-## 🔄 Unified Asynchronous Daily Pipeline Runner
+## 🛠️ Adding a Custom Alpha Signal
 
-To run data updates, indicator recalculations, and strategy simulations programmatically, run:
-```bash
-python quant_platform/run_all.py
+Create a module under `quant_platform/features/` with a `BaseSignal` subclass:
+
+```python
+# quant_platform/features/volatility.py
+import pandas as pd
+
+from quant_platform.features.base import BaseSignal
+
+
+class VolatilitySignal(BaseSignal):
+    @property
+    def name(self) -> str:
+        return "custom_volatility"
+
+    @property
+    def required_columns(self) -> list[str]:
+        return ["close"]
+
+    def compute(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.sort_values("date").copy()
+
+        result_df = pd.DataFrame({"symbol": df["symbol"], "date": df["date"]})
+        rolling_std = df["close"].rolling(window=15).std()
+        result_df["volatility_15d"] = rolling_std
+
+        return result_df
 ```
-This sequences `ingest`, `features`, and `backtest` in under 15 seconds, and refreshes the database and dashboard charts automatically.
+
+Contract enforced by the factory:
+
+- Return a `DataFrame` containing `symbol` and `date`.
+- Return exactly as many rows as the input.
+- Do not reuse a column name produced by another signal (the pipeline raises).
+
+The factory then discovers the class, computes it, adds any new column to the
+`signals` table, and persists the values.
 
 ---
 
-## ⏰ Autonomous Scheduling Task
+## 📈 Standard Calculated Indicators
 
-The daily execution is scheduled inside the **Antigravity manager** at **4:30 PM EST** (3:00 AM IST / 9:30 PM UTC) via recurring cron:
-- **Cron Expression**: `0 3 * * *`
-- **Action**: Autonomously invokes `run_all.py` to refresh pricing, signals, metrics, and dashboards daily.
+| Group | Column | Definition |
+|---|---|---|
+| Momentum | `macd_line` | EMA(Close, 12) − EMA(Close, 26) |
+| Momentum | `macd_signal` | EMA(MACD line, 9) |
+| Momentum | `macd_hist` | MACD line − MACD signal |
+| Momentum | `roc` | 12-period percent rate of change |
+| Momentum | `momentum` | Close / SMA(Close, 10) — a price-to-average ratio |
+| Mean Reversion | `rsi` | 14-period RSI with Wilder's smoothing |
+| Mean Reversion | `bb_upper` | SMA(20) + 2 × StdDev(20) |
+| Mean Reversion | `bb_lower` | SMA(20) − 2 × StdDev(20) |
+| Mean Reversion | `bb_percent` | (Close − Lower) / (Upper − Lower) |
+| Volatility | `volatility_15d` | 15-day rolling standard deviation of close |
+| Volatility | `volatility_ratio_15d` | `volatility_15d` / close |
 
+### Warmup policy
+
+Indicators are **NaN** until their rolling window is full, and those rows are
+never used to generate trades:
+
+- RSI is `NULL` for the first 14 bars. The first average gain/loss is the SMA
+  of the first 14 deltas, after which Wilder's recursion applies. The result
+  matches a reference Wilder implementation exactly.
+- Bollinger Bands (`bb_upper`, `bb_lower`, `bb_percent`) are `NULL` for the
+  first 19 bars.
+- Ratios with a zero denominator (e.g. `roc` after a zero prior close, or a
+  zero-width Bollinger band) are `NULL`, never `inf`.
+
+Filling warmup values (for example with RSI = 100) would look like a real
+signal and generate trades on indicators that carry no information.
+
+---
+
+## 📐 Performance Metric Definitions
+
+All metrics are computed from the **aggregated portfolio equity curve**, not by
+averaging per-symbol statistics.
+
+| Metric | Definition |
+|---|---|
+| Total Return | `final_value / initial_value − 1` |
+| CAGR | `(final / initial)^(252 / n_bars) − 1` |
+| Sharpe | `mean(excess daily return) / std(excess daily return) × √252` |
+| Sortino | `mean(excess) / sqrt(mean(min(excess, 0)²)) × √252` |
+| Max Drawdown | Largest peak-to-trough decline, reported as a positive fraction |
+| Win Rate | Fraction of **trades** with positive PnL |
+
+Annualization uses **252 trading days**. VectorBT's `stats()` annualizes a
+`"1D"` frequency over 365 calendar days, which overstates Sharpe by roughly
+20%; the engine therefore computes these metrics itself.
+
+---
+
+## 🔄 End-to-End Runner
+
+```bash
+python quant_platform/run_all.py                 # 15-ticker test universe
+python quant_platform/run_all.py --full-universe # full S&P 500
+```
+
+Runs ingest → features → backtest in sequence. The runner pins the working
+directory and `PYTHONPATH` to the project root, so it works from cron, systemd,
+or any other directory.
+
+For scheduling, invoke the runner from your own scheduler, for example:
+
+```cron
+30 21 * * 1-5  cd /path/to/Quant-Research-Platform && .venv/bin/python quant_platform/run_all.py >> logs/pipeline.log 2>&1
+```
+
+(21:30 UTC on weekdays — after the US close. Adjust to your timezone.)
+
+---
+
+## 🧪 Development
+
+```bash
+ruff check quant_platform tests
+ruff format --check quant_platform tests
+pytest
+```
+
+The suite covers signal maths (including RSI parity with a reference Wilder
+implementation), the feature-store upsert contract, ingestion incrementality,
+backtest look-ahead protection, metric definitions, and the dashboard via
+Streamlit's `AppTest`.
+
+### Repository layout
+
+```
+quant_platform/
+├── config.py            # paths, defaults, logging
+├── data_access.py       # shared DuckDB -> aligned matrix loading
+├── metrics.py           # portfolio metrics (252-day basis)
+├── main.py              # CLI
+├── app.py               # Streamlit dashboard
+├── run_all.py           # end-to-end runner
+├── db/                  # DuckDB connection + schema
+├── ingestion/           # BaseFetcher, YFinanceFetcher, IngestionPipeline
+├── features/            # BaseSignal, SignalFactory, signal modules
+└── backtest/            # BaseStrategy, RSIStrategy, BacktestEngine
+tests/
+data/                    # local DuckDB + JSON exports (git-ignored)
+```
+
+---
+
+## ⚠️ Known Limitations
+
+- **Daily bars only.** Intraday data, corporate-action events, and survivorship
+  bias in the S&P 500 constituent list are not modelled.
+- **No position sizing or risk model.** Capital is split evenly across symbols
+  and each entry takes an equal share.
+- **Single strategy family.** Only the RSI mean-reversion strategy is
+  implemented; the `BaseStrategy` interface is the extension point.
+- **Backtests are in-sample.** There is no walk-forward or out-of-sample
+  splitting, so reported metrics describe the fitted period only.
