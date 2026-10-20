@@ -81,18 +81,22 @@ def sharpe_ratio(equity: pd.Series, risk_free: float = 0.0) -> float:
 
 
 def sortino_ratio(equity: pd.Series, risk_free: float = 0.0) -> float:
-    """Annualized Sortino ratio on a 252-trading-day basis."""
+    """Annualized Sortino ratio on a 252-trading-day basis.
+
+    Downside deviation follows the standard definition - the root mean square
+    of negative excess returns across *all* observations - rather than the
+    standard deviation of the negative subset. The latter is undefined when
+    there is only one losing period.
+    """
     returns = equity.pct_change().dropna()
     if len(returns) < 2:
         return 0.0
     excess = returns - risk_free / TRADING_DAYS_PER_YEAR
-    downside = excess[excess < 0]
-    if downside.empty:
+    downside = excess.clip(upper=0)
+    downside_deviation = float(np.sqrt((downside ** 2).mean()))
+    if downside_deviation == 0 or math.isnan(downside_deviation):
         return 0.0
-    dd = float(downside.std(ddof=1))
-    if dd == 0 or math.isnan(dd):
-        return 0.0
-    return float(excess.mean()) / dd * math.sqrt(TRADING_DAYS_PER_YEAR)
+    return float(excess.mean()) / downside_deviation * math.sqrt(TRADING_DAYS_PER_YEAR)
 
 
 def max_drawdown(equity: pd.Series) -> float:
