@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from quant_platform import config
 from quant_platform.db.connection import get_db_connection
 from quant_platform.db.identifiers import quote_identifier
 from quant_platform.db.schema import init_db
@@ -202,6 +203,7 @@ class SignalFactory:
 
         logger.info("Computed %d feature rows. Saving to DuckDB...", len(features_df))
 
+        config.ensure_dirs()
         try:
             with get_db_connection(read_only=False) as conn:
                 init_db(conn)
@@ -270,7 +272,10 @@ class SignalFactory:
 
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                logger.exception("Rollback failed; original error follows.")
             raise
         finally:
             conn.unregister("features_df")

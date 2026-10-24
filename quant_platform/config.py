@@ -6,8 +6,15 @@ DATA_DIR = BASE_DIR / "data"
 DB_PATH = DATA_DIR / "quant_platform.db"
 BACKTEST_RESULTS_PATH = DATA_DIR / "backtest_results.json"
 
-# Ensure directories exist
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+def ensure_dirs() -> None:
+    """Create the data directory on demand.
+
+    Kept out of module import so importing the package never writes to the
+    filesystem; entry points that write data call this first.
+    """
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # Default Ingestion Settings
 DEFAULT_START_DATE = "2024-01-01"
@@ -61,9 +68,3 @@ DEFAULT_FEE = 0.001
 # Signals are shifted by this many bars before execution so a signal computed
 # from a bar's close cannot be filled at that same close (look-ahead bias).
 DEFAULT_EXECUTION_DELAY = 1
-
-# --- Warmup policy -----------------------------------------------------------
-# Rows whose indicators are still inside their rolling window are excluded from
-# the persisted feature store and from backtests.
-MIN_VALID_RSI_PERIODS = 14
-MIN_VALID_BB_PERIODS = 20

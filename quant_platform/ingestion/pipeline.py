@@ -3,7 +3,7 @@ import logging
 
 import pandas as pd
 
-from quant_platform.config import DEFAULT_TICKERS
+from quant_platform import config
 from quant_platform.db.connection import get_db_connection
 from quant_platform.db.schema import init_db
 from quant_platform.ingestion.base import BaseFetcher
@@ -21,8 +21,9 @@ class IngestionPipeline:
     3. Bulk upserts the data into DuckDB.
 
     Runs are incremental by default: each symbol is fetched from the day after
-    its latest stored date, so a daily refresh downloads one session instead of
-    the full history.
+    its own latest stored date, so a daily refresh downloads one session per
+    symbol and a lagging symbol (halted stock, transient fetch failure) is
+    backfilled instead of permanently stranded.
     """
 
     def __init__(self, fetcher: BaseFetcher, batch_size: int = 500_000):
@@ -31,9 +32,9 @@ class IngestionPipeline:
 
     def run(
         self,
-        tickers: list[str] = None,
-        start_date: str = "2024-01-01",
-        end_date: str = None,
+        tickers: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         full_refresh: bool = False,
         strict_tickers: bool = False,
     ) -> int:
@@ -44,10 +45,12 @@ class IngestionPipeline:
         -----------
         tickers : list[str], optional
             Tickers to fetch. If None, the fetcher is asked for S&P 500 tickers.
-        start_date : str
-            Start date in 'YYYY-MM-DD' format.
+        start_date : str, optional
+            Start date in 'YYYY-MM-DD' format. Defaults to
+            ``config.DEFAULT_START_DATE``.
         end_date : str, optional
-            End date in 'YYYY-MM-DD' format. Defaults to current date.
+            End date in 'YYYY-MM-DD' format (exclusive, matching yfinance).
+            Defaults to tomorrow so a same-day run picks up today's session.
         full_refresh : bool
             Re-download the entire history instead of only new sessions.
         strict_tickers : bool
@@ -58,9 +61,14 @@ class IngestionPipeline:
         int
             Number of rows ingested into the database.
         """
+        if start_date is None:
+            start_date = config.DEFAULT_START_DATE
         if end_date is None:
-            end_date = datetime.date.today().strftime("%Y-%m-%d")
+            # yfinance's `end` is exclusive; defaulting to tomorrow means a
+            # same-day run still ingests today's session.
+            end_date = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
+        config.ensure_dirs()
         with get_db_connection(read_only=False) as conn:
             init_db(conn)
 
@@ -71,44 +79,57 @@ class IngestionPipeline:
             logger.warning("No tickers to ingest.")
             return 0
 
-        fetch_start = start_date
-        if not full_refresh:
-            latest = self._latest_stored_date()
-            if latest is not None:
-                # Re-fetch the last stored session too: Yahoo occasionally
-                # revises the most recent bar, and the upsert is idempotent.
-                fetch_start = max(
-                    datetime.date.fromisoformat(start_date),
-                    latest,
-                ).isoformat()
-                logger.info("Incremental ingestion from %s (latest stored bar).", fetch_start)
+        fetch_groups = self._fetch_groups(tickers, start_date, full_refresh)
 
-        df = self.fetcher.fetch_daily_data(
-            tickers=tickers,
-            start_date=fetch_start,
-            end_date=end_date,
-        )
+        frames = []
+        for fetch_start, group in sorted(fetch_groups.items()):
+            logger.info("Fetching %d ticker(s) from %s...", len(group), fetch_start)
+            frame = self.fetcher.fetch_daily_data(
+                tickers=group,
+                start_date=fetch_start,
+                end_date=end_date,
+            )
+            if not frame.empty:
+                frames.append(frame)
 
-        if df.empty:
+        if not frames:
             logger.warning("No data was fetched. Database remains unchanged.")
             return 0
 
+        df = pd.concat(frames, ignore_index=True)
         return self._upsert(df)
 
+    def _fetch_groups(self, tickers: list[str], start_date: str, full_refresh: bool) -> dict[str, list[str]]:
+        """Group tickers by the date their incremental fetch should start from.
+
+        Each symbol resumes from its own latest stored bar (re-fetching that
+        bar, since Yahoo occasionally revises it and the upsert is
+        idempotent), so one lagging symbol cannot strand the rest.
+        """
+        floor = datetime.date.fromisoformat(start_date)
+        if full_refresh:
+            return {start_date: list(tickers)}
+
+        high_water = self._latest_stored_dates()
+        groups: dict[str, list[str]] = {}
+        for ticker in tickers:
+            latest = high_water.get(ticker)
+            resume = max(floor, latest) if latest is not None else floor
+            groups.setdefault(resume.isoformat(), []).append(ticker)
+        return groups
+
     def _resolve_tickers(self, strict: bool) -> list[str]:
-        if hasattr(self.fetcher, "fetch_sp500_tickers"):
-            try:
-                return self.fetcher.fetch_sp500_tickers(strict=strict)
-            except TypeError:
-                # Fetcher implementations that predate the `strict` flag.
-                return self.fetcher.fetch_sp500_tickers()
-        return list(DEFAULT_TICKERS)
+        try:
+            return self.fetcher.fetch_sp500_tickers(strict=strict)
+        except NotImplementedError:
+            logger.info("Fetcher does not provide S&P 500 discovery; using default ticker list.")
+            return list(config.DEFAULT_TICKERS)
 
     @staticmethod
-    def _latest_stored_date() -> datetime.date | None:
+    def _latest_stored_dates() -> dict[str, datetime.date]:
         with get_db_connection(read_only=True) as conn:
-            row = conn.execute("SELECT MAX(date) FROM daily_prices").fetchone()
-        return row[0] if row and row[0] is not None else None
+            rows = conn.execute("SELECT symbol, MAX(date) FROM daily_prices GROUP BY symbol").fetchall()
+        return {symbol: latest for symbol, latest in rows if latest is not None}
 
     def _upsert(self, df: pd.DataFrame) -> int:
         """Insert or replace daily price rows in batched transactions."""
@@ -139,7 +160,10 @@ class IngestionPipeline:
                     """)
                     conn.execute("COMMIT")
                 except Exception:
-                    conn.execute("ROLLBACK")
+                    try:
+                        conn.execute("ROLLBACK")
+                    except Exception:
+                        logger.exception("Rollback failed; original error follows.")
                     raise
                 finally:
                     conn.unregister("batch_df")

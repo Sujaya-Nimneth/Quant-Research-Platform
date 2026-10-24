@@ -104,7 +104,10 @@ class YFinanceFetcher(BaseFetcher):
                 continue
 
             if cleaned is None or cleaned.empty:
-                logger.debug("No data returned for ticker %s", symbol)
+                # yfinance rarely raises for delisted/invalid tickers; an empty
+                # frame is the failure signal, so surface it like one.
+                logger.warning("No data returned for ticker %s", symbol)
+                failures.append(symbol)
                 continue
 
             all_data.append(cleaned)
@@ -175,7 +178,11 @@ class YFinanceFetcher(BaseFetcher):
         if "index" in df.columns and "date" not in df.columns:
             df = df.rename(columns={"index": "date"})
         if "date" not in df.columns:
-            df = df.rename(columns={df.columns[0]: "date"})
+            date_like = next((c for c in df.columns if "date" in str(c).lower()), None)
+            if date_like is None:
+                logger.warning("Ticker %s frame has no date column (columns=%s), skipping.", symbol, list(df.columns))
+                return None
+            df = df.rename(columns={date_like: "date"})
 
         required_cols = ["date", "open", "high", "low", "close", "volume"]
         missing = [c for c in required_cols if c not in df.columns]
@@ -194,6 +201,9 @@ class YFinanceFetcher(BaseFetcher):
         if adj_close_col:
             cleaned["adj_close"] = pd.to_numeric(df[adj_close_col], errors="coerce")
         else:
+            # Downstream signals and fills run on the adjusted series, so a
+            # silent duplicate of raw close would poison them around splits.
+            logger.warning("Ticker %s has no adjusted-close column; falling back to raw close.", symbol)
             cleaned["adj_close"] = cleaned["close"]
 
         # Volume can legitimately be NaN/zero on halted sessions; keep it

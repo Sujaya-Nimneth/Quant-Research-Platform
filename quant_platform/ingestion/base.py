@@ -32,3 +32,17 @@ class BaseFetcher(ABC):
             The 'date' column must be of type datetime64 or date.
         """
         pass
+
+    def fetch_sp500_tickers(self, strict: bool = False) -> list[str]:
+        """
+        Discover the current S&P 500 constituent list.
+
+        Fetchers without universe discovery raise ``NotImplementedError`` and
+        the pipeline falls back to ``config.DEFAULT_TICKERS``.
+
+        Parameters:
+        -----------
+        strict : bool
+            Fail instead of silently returning a partial list.
+        """
+        raise NotImplementedError("This fetcher does not support S&P 500 ticker discovery.")

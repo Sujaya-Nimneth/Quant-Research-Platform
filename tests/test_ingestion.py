@@ -14,11 +14,27 @@ from quant_platform.ingestion.yfinance_fetcher import TickerListError, YFinanceF
 class StubFetcher(BaseFetcher):
     def __init__(self, frame: pd.DataFrame):
         self.frame = frame
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[list[str], str, str]] = []
 
     def fetch_daily_data(self, tickers, start_date, end_date) -> pd.DataFrame:
-        self.calls.append((start_date, end_date))
-        return self.frame.copy()
+        self.calls.append((list(tickers), start_date, end_date))
+        if "symbol" not in self.frame.columns:
+            return pd.DataFrame()
+        wanted = set(tickers)
+        return self.frame[self.frame["symbol"].isin(wanted)].copy()
+
+
+class SplitByDateStubFetcher(BaseFetcher):
+    """Serves different frames per symbol so each can lag by a different amount."""
+
+    def __init__(self, frames_by_symbol: dict[str, pd.DataFrame]):
+        self.frames = frames_by_symbol
+        self.calls: list[tuple[list[str], str, str]] = []
+
+    def fetch_daily_data(self, tickers, start_date, end_date) -> pd.DataFrame:
+        self.calls.append((list(tickers), start_date, end_date))
+        frames = [self.frames[symbol] for symbol in tickers if symbol in self.frames]
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def _frame(symbols=("AAA",), dates=("2024-01-02", "2024-01-03")) -> pd.DataFrame:
@@ -56,8 +72,8 @@ def test_second_run_is_incremental(empty_db):
     pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01")
     pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01")
 
-    first_start, _ = fetcher.calls[0]
-    second_start, _ = fetcher.calls[1]
+    _, first_start, _ = fetcher.calls[0]
+    _, second_start, _ = fetcher.calls[1]
     assert first_start == "2024-01-01"
     assert second_start == "2024-01-03", "second run should resume from the latest stored bar"
 
@@ -68,7 +84,50 @@ def test_full_refresh_ignores_stored_dates(empty_db):
     pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01")
     pipeline.run(tickers=["AAA"], start_date="2024-01-01", end_date="2024-02-01", full_refresh=True)
 
-    assert fetcher.calls[1][0] == "2024-01-01"
+    assert fetcher.calls[1][1] == "2024-01-01"
+
+
+def test_lagging_symbol_is_fetched_from_own_high_water_mark(empty_db):
+    # AAA is current through Jan 3 while BBB stalled at Jan 2. The incremental
+    # run must resume BBB from its own bar; a global high-water mark would
+    # strand BBB's Jan 3 session forever.
+    fetcher = SplitByDateStubFetcher(
+        {
+            "AAA": _frame(symbols=("AAA",), dates=("2024-01-02", "2024-01-03")),
+            "BBB": _frame(symbols=("BBB",), dates=("2024-01-02",)),
+        }
+    )
+    pipeline = IngestionPipeline(fetcher)
+    pipeline.run(tickers=["AAA", "BBB"], start_date="2024-01-01", end_date="2024-02-01")
+
+    fetcher.frames = {
+        "AAA": _frame(symbols=("AAA",), dates=("2024-01-02", "2024-01-03", "2024-01-04")),
+        "BBB": _frame(symbols=("BBB",), dates=("2024-01-02", "2024-01-03", "2024-01-04")),
+    }
+    fetcher.calls.clear()
+    pipeline.run(tickers=["AAA", "BBB"], start_date="2024-01-01", end_date="2024-02-01")
+
+    starts = {tuple(symbols): start for symbols, start, _ in fetcher.calls}
+    assert starts == {("AAA",): "2024-01-03", ("BBB",): "2024-01-02"}
+
+    conn = duckdb.connect(str(empty_db), read_only=True)
+    bbb_dates = [
+        str(row[0]) for row in conn.execute("SELECT date FROM daily_prices WHERE symbol='BBB' ORDER BY date").fetchall()
+    ]
+    conn.close()
+    assert bbb_dates == ["2024-01-02", "2024-01-03", "2024-01-04"]
+
+
+def test_default_dates_cover_today(empty_db):
+    # end_date defaults to tomorrow because yfinance's end bound is exclusive.
+    import datetime as dt
+
+    fetcher = StubFetcher(_frame())
+    pipeline = IngestionPipeline(fetcher)
+    pipeline.run(tickers=["AAA"])
+    _, _, requested_end = fetcher.calls[0]
+    expected = (dt.date.today() + dt.timedelta(days=1)).isoformat()
+    assert requested_end == expected
 
 
 def test_upsert_updates_existing_rows_without_duplicating(empty_db):
