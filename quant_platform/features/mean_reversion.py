@@ -80,51 +80,52 @@ class MeanReversionSignals(BaseSignal):
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
 
-        # Seed with the SMA of the first `period` observations.
-        avg_gain = gain.rolling(window=period, min_periods=period).mean()
-        avg_loss = loss.rolling(window=period, min_periods=period).mean()
-
-        seeded_gain = avg_gain.copy()
-        seeded_loss = avg_loss.copy()
-
-        # Wilder smoothing over the remaining observations. The first smoothed
-        # value sits at index `period` (from the rolling seed); recursion starts
-        # one bar later so it has a valid predecessor.
-        gain_values = gain.to_numpy(dtype=float)
-        loss_values = loss.to_numpy(dtype=float)
-        alpha = 1.0 / period
-
-        for i in range(len(close)):
-            if np.isnan(gain_values[i]) or np.isnan(loss_values[i]):
-                # Data gap: nothing to smooth. The next bars re-seed below
-                # instead of the recursion staying dead for the rest of the
-                # series.
-                continue
-
-            if i == 0 or np.isnan(seeded_gain.iloc[i - 1]) or np.isnan(seeded_loss.iloc[i - 1]):
-                # Start of series or immediately after a gap: fall back to the
-                # rolling seed, which is available once `period` clean deltas
-                # have accumulated again.
-                if not np.isnan(avg_gain.iloc[i]) and not np.isnan(avg_loss.iloc[i]):
-                    seeded_gain.iloc[i] = avg_gain.iloc[i]
-                    seeded_loss.iloc[i] = avg_loss.iloc[i]
-                continue
-
-            prev_gain = seeded_gain.iloc[i - 1]
-            prev_loss = seeded_loss.iloc[i - 1]
-            seeded_gain.iloc[i] = prev_gain + alpha * (gain_values[i] - prev_gain)
-            seeded_loss.iloc[i] = prev_loss + alpha * (loss_values[i] - prev_loss)
+        avg_gain = _wilder_average(gain, period)
+        avg_loss = _wilder_average(loss, period)
 
         rsi = pd.Series(np.nan, index=close.index, dtype=float)
 
-        valid = seeded_gain.notna() & seeded_loss.notna()
+        valid = avg_gain.notna() & avg_loss.notna()
         # No losses at all: RSI is 100 when there are gains, 50 when flat.
-        no_loss = valid & (seeded_loss == 0)
-        rsi[no_loss & (seeded_gain > 0)] = 100.0
-        rsi[no_loss & (seeded_gain == 0)] = 50.0
+        no_loss = valid & (avg_loss == 0)
+        rsi[no_loss & (avg_gain > 0)] = 100.0
+        rsi[no_loss & (avg_gain == 0)] = 50.0
 
-        normal = valid & (seeded_loss > 0)
-        rs = seeded_gain[normal] / seeded_loss[normal]
+        normal = valid & (avg_loss > 0)
+        rs = avg_gain[normal] / avg_loss[normal]
         rsi[normal] = 100.0 - (100.0 / (1.0 + rs))
 
         return rsi
+
+
+def _wilder_average(values: pd.Series, period: int) -> pd.Series:
+    """Wilder-smoothed average of ``values`` (seed = SMA, then EMA recursion).
+
+    Computed per contiguous run of non-NaN values so a data gap re-seeds the
+    smoothing instead of poisoning the rest of the series. Within a run, the
+    SMA of the first `period` values seeds an ``ewm(alpha=1/period)`` chain,
+    which is algebraically Wilder's recursion but runs at C speed.
+    """
+    out = pd.Series(np.nan, index=values.index, dtype=float)
+    valid = values.notna().to_numpy()
+
+    # Split the series into contiguous runs of valid values.
+    positions = np.arange(len(values))
+    run_id = np.cumsum(~valid)
+    valid_positions = positions[valid]
+    valid_run_ids = run_id[valid]
+    boundaries = np.flatnonzero(np.diff(valid_run_ids) != 0) + 1
+    for run_positions in np.split(valid_positions, boundaries):
+        run = values.iloc[run_positions]
+        if len(run) < period:
+            continue
+
+        seed = float(run.iloc[:period].mean())
+        # ewm over [seed, rest...] reproduces y[k] = (1-a)*y[k-1] + a*x[k]
+        # exactly, starting from the SMA seed.
+        chain = pd.concat([pd.Series([seed], dtype=float), run.iloc[period:]], ignore_index=True)
+        smoothed = chain.ewm(alpha=1.0 / period, adjust=False).mean()
+
+        out.iloc[run_positions[period - 1 :]] = smoothed.to_numpy()
+
+    return out

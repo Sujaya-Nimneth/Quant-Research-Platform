@@ -176,7 +176,15 @@ def handle_backtest(args):
         from quant_platform.backtest.engine import BacktestEngine
 
         engine = BacktestEngine(strategy, execution_delay=args.execution_delay)
-        engine.run(init_cash=args.init_cash, fee=args.fee, slippage=args.slippage, output_path=args.output)
+        engine.run(
+            init_cash=args.init_cash,
+            fee=args.fee,
+            slippage=args.slippage,
+            output_path=args.output,
+            start=args.start_date,
+            end=args.end_date,
+            symbols=[s.strip() for s in args.symbols.split(",")] if args.symbols else None,
+        )
     except Exception:
         logger.exception("Failed to complete backtest run.")
         sys.exit(1)
@@ -290,6 +298,24 @@ def main():
     )
     backtest_parser.add_argument("--rsi-entry", type=float, default=30.0, help="RSI buy threshold (default: 30.0)")
     backtest_parser.add_argument("--rsi-exit", type=float, default=70.0, help="RSI sell threshold (default: 70.0)")
+    backtest_parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help="Backtest window start in YYYY-MM-DD format, inclusive (default: full history).",
+    )
+    backtest_parser.add_argument(
+        "--end-date",
+        type=str,
+        default=None,
+        help="Backtest window end in YYYY-MM-DD format, inclusive (default: full history).",
+    )
+    backtest_parser.add_argument(
+        "--symbols",
+        type=str,
+        default=None,
+        help="Comma-separated subset of symbols to backtest (default: all ingested symbols).",
+    )
 
     args = parser.parse_args()
 

@@ -84,6 +84,10 @@ class YFinanceFetcher(BaseFetcher):
     ) -> pd.DataFrame:
         """
         Fetches daily historical pricing and volume data for a list of tickers.
+
+        The whole group is requested in one batched download first; symbols the
+        batch could not serve (delisted, mangled slices, batch failure) fall
+        back to individual downloads with retries.
         """
         logger.info(
             "Starting yfinance download for %d tickers from %s to %s...",
@@ -92,10 +96,20 @@ class YFinanceFetcher(BaseFetcher):
             end_date,
         )
 
-        all_data = []
+        all_data: list[pd.DataFrame] = []
         failures: list[str] = []
 
-        for symbol in tqdm(tickers, desc="Downloading Market Data"):
+        batched = self._fetch_batch(tickers, start_date, end_date)
+        for symbol in tickers:
+            frame = batched.get(symbol)
+            if frame is not None and not frame.empty:
+                all_data.append(frame)
+
+        # Anything the batch missed goes through the per-symbol path.
+        missing = [symbol for symbol in tickers if batched.get(symbol) is None or batched[symbol].empty]
+        if missing:
+            logger.info("Fetching %d ticker(s) individually after the batch pass...", len(missing))
+        for symbol in tqdm(missing, desc="Downloading Market Data"):
             try:
                 cleaned = self._fetch_symbol(symbol, start_date, end_date)
             except Exception as e:
@@ -131,37 +145,81 @@ class YFinanceFetcher(BaseFetcher):
         logger.info("Download complete. Fetched %d daily price records.", len(final_df))
         return final_df
 
-    def _fetch_symbol(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame | None:
-        """Download and normalise one symbol, retrying transient failures."""
-        last_error: Exception | None = None
+    def _fetch_batch(self, tickers: list[str], start_date: str, end_date: str) -> dict[str, pd.DataFrame | None]:
+        """One multi-ticker download; unusable symbols are simply absent."""
+        wanted = list(tickers)
+        if len(wanted) < 2:
+            return {}
 
-        for attempt in range(1, self.retries + 1):
-            try:
-                df = yf.download(
-                    symbol,
+        try:
+            raw = self._download_with_retries(
+                lambda: yf.download(
+                    wanted,
                     start=start_date,
                     end=end_date,
                     progress=False,
                     auto_adjust=False,
                     actions=False,
-                    threads=False,
-                )
-                return self._normalize(symbol, df)
+                    threads=True,
+                    group_by="ticker",
+                ),
+                "batch",
+            )
+        except Exception as e:
+            logger.warning("Batched download failed (%s); falling back to per-symbol requests.", e)
+            return {}
+
+        if raw is None or raw.empty:
+            return {}
+
+        frames: dict[str, pd.DataFrame | None] = {}
+        for symbol in wanted:
+            try:
+                if isinstance(raw.columns, pd.MultiIndex):
+                    frames[symbol] = self._normalize(symbol, raw[symbol])
+                else:
+                    frames[symbol] = self._normalize(symbol, raw)
+            except Exception as e:
+                logger.debug("Batch slice for %s unusable (%s); will retry individually.", symbol, e)
+                frames[symbol] = None
+        return frames
+
+    def _fetch_symbol(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame | None:
+        """Download and normalise one symbol, retrying transient failures."""
+        df = self._download_with_retries(
+            lambda: yf.download(
+                symbol,
+                start=start_date,
+                end=end_date,
+                progress=False,
+                auto_adjust=False,
+                actions=False,
+                threads=False,
+            ),
+            symbol,
+        )
+        return self._normalize(symbol, df)
+
+    def _download_with_retries(self, download, label: str):
+        """Run one download callable with exponential-backoff retries."""
+        last_error: Exception | None = None
+        for attempt in range(1, self.retries + 1):
+            try:
+                return download()
             except Exception as e:
                 last_error = e
                 if attempt < self.retries:
                     sleep_for = self.backoff_seconds * (2 ** (attempt - 1))
                     logger.debug(
                         "Retrying %s after error (attempt %d/%d) in %.1fs: %s",
-                        symbol,
+                        label,
                         attempt,
                         self.retries,
                         sleep_for,
                         e,
                     )
                     time.sleep(sleep_for)
-
-        raise last_error if last_error else RuntimeError(f"Unknown failure for {symbol}")
+        raise last_error if last_error else RuntimeError(f"Unknown failure for {label}")
 
     @staticmethod
     def _normalize(symbol: str, df: pd.DataFrame) -> pd.DataFrame | None:

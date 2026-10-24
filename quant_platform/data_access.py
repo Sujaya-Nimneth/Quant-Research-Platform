@@ -67,7 +67,12 @@ def require_tables() -> None:
         _require_tables_on(conn)
 
 
-def load_aligned_matrices(indicators: list[str]) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+def load_aligned_matrices(
+    indicators: list[str],
+    start: str | None = None,
+    end: str | None = None,
+    symbols: list[str] | None = None,
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """Load adjusted close prices plus the requested indicator columns as wide matrices.
 
     Prices are read from ``adj_close`` - the split/dividend-adjusted series -
@@ -79,6 +84,11 @@ def load_aligned_matrices(indicators: list[str]) -> tuple[pd.DataFrame, dict[str
     ----------
     indicators:
         Column names from the ``signals`` table to pivot, e.g. ``["rsi"]``.
+    start, end:
+        Optional inclusive ``YYYY-MM-DD`` bounds pushed down into SQL so
+        partial histories do not pay a full-table load.
+    symbols:
+        Optional symbol whitelist, also pushed down into SQL.
 
     Returns
     -------
@@ -89,6 +99,20 @@ def load_aligned_matrices(indicators: list[str]) -> tuple[pd.DataFrame, dict[str
     """
     _check_db_exists()
     quoted_indicators = [quote_identifier(name, kind="indicator column") for name in indicators]
+
+    conditions: list[str] = []
+    params: list = []
+    if start:
+        conditions.append("date >= ?")
+        params.append(start)
+    if end:
+        conditions.append("date <= ?")
+        params.append(end)
+    if symbols:
+        placeholders = ", ".join("?" for _ in symbols)
+        conditions.append(f"symbol IN ({placeholders})")
+        params.extend(symbols)
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     with get_db_connection(read_only=True) as conn:
         _require_tables_on(conn)
@@ -102,10 +126,10 @@ def load_aligned_matrices(indicators: list[str]) -> tuple[pd.DataFrame, dict[str
             )
 
         price_df = conn.execute(
-            f"SELECT symbol, date, adj_close AS close FROM {PRICE_TABLE} ORDER BY date, symbol"
+            f"SELECT symbol, date, adj_close AS close FROM {PRICE_TABLE}{where} ORDER BY date, symbol", params
         ).df()
         selected = ", ".join(["symbol", "date", *quoted_indicators])
-        signal_df = conn.execute(f"SELECT {selected} FROM {SIGNAL_TABLE} ORDER BY date, symbol").df()
+        signal_df = conn.execute(f"SELECT {selected} FROM {SIGNAL_TABLE}{where} ORDER BY date, symbol", params).df()
 
     if price_df.empty or signal_df.empty:
         raise ValueError("No rows found in 'daily_prices' or 'signals'. Run the ingestion and feature pipelines first.")

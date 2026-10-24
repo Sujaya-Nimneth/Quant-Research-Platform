@@ -44,12 +44,21 @@ class BacktestEngine:
         self.strategy = strategy
         self.execution_delay = execution_delay
 
-    def load_data(self) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
+    def load_data(
+        self,
+        start: str | None = None,
+        end: str | None = None,
+        symbols: list[str] | None = None,
+    ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
         """
         Loads daily pricing and the indicator columns required by the strategy.
+
+        ``start``/``end`` (inclusive YYYY-MM-DD) and ``symbols`` are optional
+        filters pushed down into SQL so partial backtests do not load the full
+        history.
         """
         logger.info("Loading pricing and indicators data from DuckDB...")
-        return load_aligned_matrices(self.strategy.required_indicators)
+        return load_aligned_matrices(self.strategy.required_indicators, start=start, end=end, symbols=symbols)
 
     def run(
         self,
@@ -57,17 +66,20 @@ class BacktestEngine:
         fee: float = config.DEFAULT_FEE,
         output_path: str | None = None,
         slippage: float = 0.0,
+        start: str | None = None,
+        end: str | None = None,
+        symbols: list[str] | None = None,
     ) -> dict:
         """
         Runs the backtest.
 
-        ``init_cash`` is the total portfolio capital, shared across all symbols.
+        ``init_cash`` is the total portfolio capital. All symbols share one
+        cash book, so idle cash can fund any symbol's entry.
         """
         # 1. Load aligned close and indicator matrices
-        close, indicators = self.load_data()
+        close, indicators = self.load_data(start=start, end=end, symbols=symbols)
 
-        # Drop symbols with no prices at all: they can never trade, and an
-        # equal cash slice reserved for a dead column just drags the metrics.
+        # Drop symbols with no prices at all: they can never trade.
         tradable = [col for col in close.columns if close[col].notna().any()]
         if not tradable:
             raise ValueError("No symbol has any price data; nothing to backtest.")
@@ -86,25 +98,25 @@ class BacktestEngine:
         entries = entries.shift(self.execution_delay).fillna(False).astype(bool)
         exits = exits.shift(self.execution_delay).fillna(False).astype(bool)
 
-        # 4. Simulate the portfolio via VectorBT.
-        #    ``init_cash`` is total capital: it is split evenly across symbols so
-        #    every name can hold a position and diversification is preserved.
-        #    The split is static - idle cash in one symbol's book cannot fund
-        #    another's entry - which makes the simulation conservative.
-        cash_per_symbol = init_cash / len(close.columns)
+        # 4. Simulate the portfolio via VectorBT as one group with shared cash:
+        #    a signal on any symbol can use capital not yet deployed elsewhere,
+        #    which the old static per-symbol split understated.
         logger.info(
-            "Simulating portfolio allocation using vectorbt (delay=%d bar(s), $%.2f per symbol)...",
+            "Simulating portfolio using vectorbt (delay=%d bar(s), $%.2f pooled across %d symbols)...",
             self.execution_delay,
-            cash_per_symbol,
+            init_cash,
+            len(close.columns),
         )
         portfolio = vbt.Portfolio.from_signals(
             close=close,
             entries=entries,
             exits=exits,
-            init_cash=cash_per_symbol,
+            init_cash=init_cash,
             fees=fee,
             slippage=slippage,
             freq="1D",
+            group_by=True,
+            cash_sharing=True,
         )
 
         # 5. Portfolio-level metrics from the aggregated equity curve
