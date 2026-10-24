@@ -46,9 +46,10 @@ class MeanReversionSignals(BaseSignal):
 
         result_df["rsi"] = self._rsi(close)
 
-        # Bollinger Bands (20-day SMA +/- 2 standard deviations)
+        # Bollinger Bands (20-day SMA +/- 2 standard deviations). Population
+        # std (ddof=0) matches the classic definition and TA-Lib.
         sma = close.rolling(window=self._bb_period).mean()
-        std = close.rolling(window=self._bb_period).std()
+        std = close.rolling(window=self._bb_period).std(ddof=0)
 
         bb_upper = sma + (self._bb_std * std)
         bb_lower = sma - (self._bb_std * std)
@@ -70,7 +71,8 @@ class MeanReversionSignals(BaseSignal):
         The first average gain/loss is a simple mean of the first `period`
         deltas; subsequent values use Wilder's recursive smoothing
         (equivalent to an EMA with alpha = 1/period). The result is NaN until
-        a full window is available.
+        a full window is available, and re-seeds the same way after a data
+        gap instead of staying NaN for the rest of the series.
         """
         period = self._rsi_period
         delta = close.diff()
@@ -92,13 +94,24 @@ class MeanReversionSignals(BaseSignal):
         loss_values = loss.to_numpy(dtype=float)
         alpha = 1.0 / period
 
-        for i in range(period + 1, len(close)):
+        for i in range(len(close)):
+            if np.isnan(gain_values[i]) or np.isnan(loss_values[i]):
+                # Data gap: nothing to smooth. The next bars re-seed below
+                # instead of the recursion staying dead for the rest of the
+                # series.
+                continue
+
+            if i == 0 or np.isnan(seeded_gain.iloc[i - 1]) or np.isnan(seeded_loss.iloc[i - 1]):
+                # Start of series or immediately after a gap: fall back to the
+                # rolling seed, which is available once `period` clean deltas
+                # have accumulated again.
+                if not np.isnan(avg_gain.iloc[i]) and not np.isnan(avg_loss.iloc[i]):
+                    seeded_gain.iloc[i] = avg_gain.iloc[i]
+                    seeded_loss.iloc[i] = avg_loss.iloc[i]
+                continue
+
             prev_gain = seeded_gain.iloc[i - 1]
             prev_loss = seeded_loss.iloc[i - 1]
-            if np.isnan(prev_gain) or np.isnan(prev_loss):
-                continue
-            if np.isnan(gain_values[i]) or np.isnan(loss_values[i]):
-                continue
             seeded_gain.iloc[i] = prev_gain + alpha * (gain_values[i] - prev_gain)
             seeded_loss.iloc[i] = prev_loss + alpha * (loss_values[i] - prev_loss)
 

@@ -60,10 +60,19 @@ class MomentumSignals(BaseSignal):
         ema_slow = close.ewm(span=self._macd_slow, adjust=False).mean()
         macd_line = ema_fast - ema_slow
         macd_signal_line = macd_line.ewm(span=self._macd_signal, adjust=False).mean()
+        macd_hist = macd_line - macd_signal_line
+
+        # EWM emits values from bar 0, but they are statistically meaningless
+        # until the slow EMA has converged and the signal line has a window;
+        # mask the warmup so no strategy can trade on it.
+        macd_warmup = self._macd_slow + self._macd_signal
+        macd_line.iloc[:macd_warmup] = np.nan
+        macd_signal_line.iloc[:macd_warmup] = np.nan
+        macd_hist.iloc[:macd_warmup] = np.nan
 
         result_df["macd_line"] = macd_line
         result_df["macd_signal"] = macd_signal_line
-        result_df["macd_hist"] = macd_line - macd_signal_line
+        result_df["macd_hist"] = macd_hist
 
         # 2. ROC, expressed in percent. Guard against a zero prior close.
         prior_close = close.shift(self._roc_period)

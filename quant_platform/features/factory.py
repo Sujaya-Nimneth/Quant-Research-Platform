@@ -42,6 +42,14 @@ class SignalFactory:
         """
         Manually registers a signal generator.
         """
+        existing = self._signals.get(signal.name)
+        if existing is not None and existing is not signal:
+            logger.warning(
+                "Signal name '%s' is already registered by %s; %s replaces it (last import wins).",
+                signal.name,
+                type(existing).__name__,
+                type(signal).__name__,
+            )
         self._signals[signal.name] = signal
         logger.info("Registered signal generator: %s", signal.name)
 

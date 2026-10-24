@@ -54,6 +54,21 @@ def test_rsi_matches_reference_implementation():
     np.testing.assert_allclose(result["rsi"].to_numpy(), expected, rtol=1e-9, atol=1e-9)
 
 
+def test_rsi_reseeds_after_data_gap():
+    # A missing close in the middle of the series must not kill RSI forever;
+    # it re-seeds once a full window of clean deltas is available again.
+    rng = np.random.default_rng(5)
+    values = 100 + np.cumsum(rng.normal(0, 1, 100))
+    values[40] = np.nan
+    close = pd.Series(values)
+    rsi = MeanReversionSignals().compute(_close_frame(close))["rsi"]
+
+    # Directly after the gap the value is still NaN...
+    assert np.isnan(rsi.iloc[41])
+    # ...but by 2*period bars later it must be populated again.
+    assert rsi.iloc[41 + 30 :].notna().all()
+
+
 def test_rsi_warmup_is_nan_not_filled():
     rng = np.random.default_rng(11)
     close = pd.Series(100 + np.cumsum(rng.normal(0, 1, 120)))
@@ -94,6 +109,20 @@ def test_roc_and_momentum_never_produce_infinities():
 
     numeric = result[["roc", "momentum", "macd_line"]].to_numpy(dtype=float)
     assert not np.isinf(numeric).any()
+
+
+def test_macd_warmup_is_nan():
+    # EWM emits numbers from bar 0; they must be masked until the slow EMA
+    # and signal line have real windows.
+    rng = np.random.default_rng(21)
+    close = pd.Series(100 + np.cumsum(rng.normal(0, 1, 80)))
+    result = MomentumSignals().compute(_close_frame(close))
+
+    warmup = 26 + 9
+    assert result["macd_line"].iloc[:warmup].isna().all()
+    assert result["macd_signal"].iloc[:warmup].isna().all()
+    assert result["macd_hist"].iloc[:warmup].isna().all()
+    assert result["macd_line"].iloc[warmup:].notna().all()
 
 
 def test_momentum_roc_matches_pct_change():
