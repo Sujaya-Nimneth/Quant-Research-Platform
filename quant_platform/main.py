@@ -1,21 +1,24 @@
 import argparse
+import logging
 import logging.config
 import sys
 
+from quant_platform import config
 from quant_platform.config import (
     BACKTEST_RESULTS_PATH,
     DEFAULT_EXECUTION_DELAY,
     DEFAULT_FEE,
+    DEFAULT_INIT_CASH,
     DEFAULT_START_DATE,
     LOGGING_CONFIG,
 )
+from quant_platform.data_access import require_tables
 from quant_platform.db.connection import get_db_connection
+from quant_platform.db.identifiers import quote_identifier
 from quant_platform.features.factory import SignalFactory
 from quant_platform.ingestion.pipeline import IngestionPipeline
 from quant_platform.ingestion.yfinance_fetcher import YFinanceFetcher
 
-# Initialize central logging
-logging.config.dictConfig(LOGGING_CONFIG)
 logger = logging.getLogger("quant_platform")
 
 
@@ -29,12 +32,10 @@ def handle_ingest(args):
     tickers = None
     if args.tickers:
         tickers = [t.strip() for t in args.tickers.split(",")]
-        logger.info(f"Custom tickers specified: {tickers}")
+        logger.info("Custom tickers specified: %s", tickers)
     elif args.test:
-        from quant_platform.config import DEFAULT_TICKERS
-
-        tickers = DEFAULT_TICKERS
-        logger.info(f"Running in TEST mode with a representative subset: {tickers}")
+        tickers = list(config.DEFAULT_TICKERS)
+        logger.info("Running in TEST mode with a representative subset: %s", tickers)
 
     # Fetcher and Pipeline
     fetcher = YFinanceFetcher()
@@ -49,9 +50,9 @@ def handle_ingest(args):
             full_refresh=args.full_refresh,
             strict_tickers=args.strict_tickers,
         )
-        logger.info(f"Ingestion process completed. Total new rows downloaded: {rows_ingested}")
-    except Exception as e:
-        logger.error(f"Failed to complete ingestion: {e}")
+        logger.info("Ingestion process completed. Total new rows downloaded: %d", rows_ingested)
+    except Exception:
+        logger.exception("Failed to complete ingestion.")
         sys.exit(1)
 
 
@@ -65,9 +66,9 @@ def handle_features(args):
     try:
         factory = SignalFactory()
         features_computed = factory.run_pipeline()
-        logger.info(f"Feature engineering pipeline completed. Total rows calculated: {features_computed}")
-    except Exception as e:
-        logger.error(f"Failed to complete feature engineering: {e}")
+        logger.info("Feature engineering pipeline completed. Total rows calculated: %d", features_computed)
+    except Exception:
+        logger.exception("Failed to complete feature engineering.")
         sys.exit(1)
 
 
@@ -78,6 +79,20 @@ def handle_status(args):
     """
     logger.info("Checking Quantitative Platform Status...")
 
+    try:
+        require_tables()
+    except ValueError as e:
+        print(f"Status unavailable: {e}")
+        return
+
+    try:
+        _print_status()
+    except Exception:
+        logger.exception("Failed to read database status.")
+        sys.exit(1)
+
+
+def _print_status():
     with get_db_connection(read_only=True) as conn:
         # Check tables
         tables = conn.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'").fetchall()
@@ -123,14 +138,18 @@ def handle_status(args):
             print(f"  - Total features records: {signals_count:,}")
             print(f"  - Computed Alpha features: {', '.join(feature_cols)}")
 
-            # Print a few rows of sample calculated features
-            sample_features = conn.execute(
-                "SELECT symbol, date, macd_line, rsi, bb_percent FROM signals WHERE macd_line IS NOT NULL LIMIT 5"
-            ).df()
-
-            if not sample_features.empty:
-                print("  - Sample Feature Vectors:")
-                print(sample_features.to_string(index=False))
+            # The sample query is built from the discovered feature columns so
+            # it keeps working when the signal set changes.
+            sample_cols = feature_cols[:3]
+            if sample_cols:
+                selected = ", ".join(["symbol", "date", *(quote_identifier(c) for c in sample_cols)])
+                non_null = quote_identifier(sample_cols[0])
+                sample_features = conn.execute(
+                    f"SELECT {selected} FROM signals WHERE {non_null} IS NOT NULL LIMIT 5"
+                ).df()
+                if not sample_features.empty:
+                    print("  - Sample Feature Vectors:")
+                    print(sample_features.to_string(index=False))
             print()
         else:
             print("Table: signals [NOT CREATED YET]\n")
@@ -149,7 +168,7 @@ def handle_backtest(args):
 
         strategy = RSIStrategy(entry_threshold=args.rsi_entry, exit_threshold=args.rsi_exit)
     else:
-        logger.error(f"Strategy '{args.strategy}' is not supported yet.")
+        logger.error("Strategy '%s' is not supported yet.", args.strategy)
         sys.exit(1)
 
     # 2. Instantiate and run Backtest Engine
@@ -158,20 +177,51 @@ def handle_backtest(args):
 
         engine = BacktestEngine(strategy, execution_delay=args.execution_delay)
         engine.run(init_cash=args.init_cash, fee=args.fee, slippage=args.slippage, output_path=args.output)
-    except Exception as e:
-        logger.error(f"Failed to complete backtest run: {e}")
+    except Exception:
+        logger.exception("Failed to complete backtest run.")
         sys.exit(1)
 
 
+def _positive_float(value: str) -> float:
+    number = float(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be positive")
+    return number
+
+
+def _non_negative_float(value: str) -> float:
+    number = float(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be >= 0")
+    return number
+
+
+def _execution_delay(value: str) -> int:
+    delay = int(value)
+    if delay < 1:
+        raise argparse.ArgumentTypeError(
+            "execution delay must be >= 1 so a signal computed from a bar's close cannot fill at that same close"
+        )
+    return delay
+
+
 def main():
+    # Configure logging at the entry point only, so importing this module
+    # never reconfigures the host application's loggers.
+    logging.config.dictConfig(LOGGING_CONFIG)
+
     parser = argparse.ArgumentParser(description="Quant Research Platform Ingestion & Feature Engineering CLI")
 
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available Commands")
 
     # 1. Ingest Command
     ingest_parser = subparsers.add_parser("ingest", help="Ingest daily price & volume data from yfinance")
-    ingest_parser.add_argument(
+    ticker_source = ingest_parser.add_mutually_exclusive_group()
+    ticker_source.add_argument(
         "--tickers", type=str, help="Comma-separated list of symbols (e.g. AAPL,MSFT,SPY). If omitted, fetches S&P 500."
+    )
+    ticker_source.add_argument(
+        "--test", action="store_true", help="Ingest only a small representative test subset of tickers (faster)"
     )
     ingest_parser.add_argument(
         "--start-date",
@@ -179,9 +229,10 @@ def main():
         default=DEFAULT_START_DATE,
         help=f"Start date in YYYY-MM-DD format (default: {DEFAULT_START_DATE})",
     )
-    ingest_parser.add_argument("--end-date", type=str, help="End date in YYYY-MM-DD format (default: today)")
     ingest_parser.add_argument(
-        "--test", action="store_true", help="Ingest only a small representative test subset of tickers (faster)"
+        "--end-date",
+        type=str,
+        help="End date in YYYY-MM-DD format, exclusive (default: tomorrow, so today's session is included)",
     )
     ingest_parser.add_argument(
         "--full-refresh",
@@ -209,22 +260,22 @@ def main():
     )
     backtest_parser.add_argument(
         "--init-cash",
-        type=float,
-        default=10000.0,
-        help="Total initial capital in cash, split across symbols (default: 10000.0)",
+        type=_positive_float,
+        default=DEFAULT_INIT_CASH,
+        help=f"Total initial capital in cash, split across symbols (default: {DEFAULT_INIT_CASH})",
     )
     backtest_parser.add_argument(
         "--fee",
-        type=float,
+        type=_positive_float,
         default=DEFAULT_FEE,
         help=f"Transaction fee per trade as a fraction (default: {DEFAULT_FEE}, i.e. 10 bps)",
     )
     backtest_parser.add_argument(
-        "--slippage", type=float, default=0.0, help="Slippage per trade as a fraction (default: 0.0)"
+        "--slippage", type=_non_negative_float, default=0.0, help="Slippage per trade as a fraction (default: 0.0)"
     )
     backtest_parser.add_argument(
         "--execution-delay",
-        type=int,
+        type=_execution_delay,
         default=DEFAULT_EXECUTION_DELAY,
         help=(
             "Bars to wait before filling a signal (default: "

@@ -64,7 +64,9 @@ class RSIStrategy(BaseStrategy):
 
     @property
     def name(self) -> str:
-        return f"RSI_Strategy_{int(self.entry_threshold)}_{int(self.exit_threshold)}"
+        # :g keeps whole numbers compact (30) without truncating 30.5 to 30,
+        # which would collide with a different configuration's name.
+        return f"RSI_Strategy_{self.entry_threshold:g}_{self.exit_threshold:g}"
 
     @property
     def required_indicators(self) -> list[str]:

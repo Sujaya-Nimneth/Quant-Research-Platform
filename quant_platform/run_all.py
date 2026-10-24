@@ -17,16 +17,17 @@ from quant_platform.config import (  # noqa: E402
     BASE_DIR,
     DEFAULT_FEE,
     DEFAULT_INIT_CASH,
+    DEFAULT_START_DATE,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] quant_platform_runner: %(message)s",
-)
 logger = logging.getLogger("quant_platform_runner")
 
+# Generous per-stage budget: the full-universe yfinance download is the slow
+# step, and a hung child must not wedge a scheduled run forever.
+STEP_TIMEOUT_SECONDS = 60 * 60
 
-def _run_step(label: str, args: list[str], echo_stdout: bool = False) -> None:
+
+def _run_step(label: str, args: list[str], echo_stdout: bool = False, timeout: int = STEP_TIMEOUT_SECONDS) -> None:
     """Run one pipeline stage as a subprocess.
 
     The child inherits ``BASE_DIR`` as its working directory and on
@@ -46,7 +47,15 @@ def _run_step(label: str, args: list[str], echo_stdout: bool = False) -> None:
             check=True,
             cwd=str(BASE_DIR),
             env=env,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired as e:
+        logger.error("FATAL: %s timed out after %d seconds!", label, timeout)
+        if e.stdout:
+            logger.error("--- stdout ---\n%s", e.stdout.rstrip())
+        if e.stderr:
+            logger.error("--- stderr ---\n%s", e.stderr.rstrip())
+        raise SystemExit(1) from e
     except subprocess.CalledProcessError as e:
         logger.error("FATAL: %s failed with exit code %d!", label, e.returncode)
         if e.stdout:
@@ -71,6 +80,7 @@ def run_all(
     full_refresh: bool = False,
     init_cash: float = DEFAULT_INIT_CASH,
     fee: float = DEFAULT_FEE,
+    start_date: str | None = None,
 ) -> None:
     """
     Executes the entire quantitative pipeline sequentially:
@@ -92,6 +102,8 @@ def run_all(
         ingest_args.append("--full-refresh")
     if not test_mode:
         ingest_args.append("--strict-tickers")
+    if start_date:
+        ingest_args += ["--start-date", start_date]
     _run_step("Data ingestion", ingest_args)
 
     # 2. Features
@@ -123,6 +135,10 @@ def run_all(
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] quant_platform_runner: %(message)s",
+    )
     parser = argparse.ArgumentParser(description="Run the full quant platform pipeline.")
     parser.add_argument(
         "--full-universe",
@@ -134,6 +150,12 @@ def main() -> None:
         action="store_true",
         help="Re-download all history instead of only new sessions.",
     )
+    parser.add_argument(
+        "--start-date",
+        type=str,
+        default=None,
+        help=f"Ingestion window start in YYYY-MM-DD format (default: {DEFAULT_START_DATE}).",
+    )
     parser.add_argument("--init-cash", type=float, default=DEFAULT_INIT_CASH)
     parser.add_argument("--fee", type=float, default=DEFAULT_FEE)
     args = parser.parse_args()
@@ -143,6 +165,7 @@ def main() -> None:
         full_refresh=args.full_refresh,
         init_cash=args.init_cash,
         fee=args.fee,
+        start_date=args.start_date,
     )
 
 

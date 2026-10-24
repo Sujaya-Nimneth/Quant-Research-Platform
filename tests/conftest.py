@@ -20,10 +20,13 @@ from quant_platform.db.schema import init_db  # noqa: E402
 
 @pytest.fixture()
 def db_path(tmp_path, monkeypatch):
-    """Point the platform's DB_PATH at a throwaway DuckDB file."""
+    """Point the platform's DB_PATH at a throwaway DuckDB file.
+
+    Every module reads the path via ``config.DB_PATH`` at call time, so a
+    single patch isolates the whole platform.
+    """
     path = tmp_path / "test.db"
     monkeypatch.setattr("quant_platform.config.DB_PATH", path)
-    monkeypatch.setattr("quant_platform.db.connection.DB_PATH", path)
     return path
 
 

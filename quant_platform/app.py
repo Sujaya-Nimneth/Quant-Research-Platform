@@ -84,6 +84,29 @@ def load_trades(results: dict | None) -> pd.DataFrame:
     return pd.DataFrame(results["trades"])
 
 
+def _thresholds_from_strategy_name(
+    name: str, default_entry: float = 30.0, default_exit: float = 70.0
+) -> tuple[float, float]:
+    """Recover RSI entry/exit thresholds from the strategy name in the export.
+
+    Names follow ``RSI_Strategy_<entry>_<exit>``; anything unexpected falls
+    back to the documented defaults so marker labels never lie about the
+    thresholds that actually produced the trades.
+    """
+    parts = str(name).split("_")
+    if len(parts) >= 3:
+        try:
+            return float(parts[-2]), float(parts[-1])
+        except ValueError:
+            pass
+    return default_entry, default_exit
+
+
+def _fmt_ratio(value: float | None) -> str:
+    """Render a ratio; null (an unbounded degenerate case) renders as a dash."""
+    return f"{value:.3f}" if isinstance(value, (int, float)) else "—"
+
+
 def build_equity_chart(strategy_equity: pd.Series, benchmark_equity: pd.Series) -> go.Figure:
     fig = go.Figure()
     fig.add_trace(
@@ -176,27 +199,39 @@ def main() -> None:
     trades = load_trades(results)
 
     if results:
-        summary = results["summary"]
-        equity_records = results.get("equity_curve") or []
-        strategy_equity = pd.Series(
-            [r["value"] for r in equity_records],
-            index=pd.to_datetime([r["date"] for r in equity_records]),
-            dtype=float,
-        )
-        total_init_cash = float(summary["initial_cash"])
-        strategy_metrics = {
-            "total_return": summary["total_return_pct"] / 100.0,
-            "cagr": summary["annualized_return_pct"] / 100.0,
-            "max_drawdown": summary["max_drawdown_pct"] / 100.0,
-            "average_drawdown": summary.get("average_drawdown_pct", 0.0) / 100.0,
-            "sharpe_ratio": summary["sharpe_ratio"],
-            "sortino_ratio": summary.get("sortino_ratio", 0.0),
-            "final_value": summary["final_value"],
-        }
-        win_rate = summary["win_rate_pct"] / 100.0
-        total_trades = summary["total_trades"]
-        execution_delay = summary.get("execution_delay_bars", DEFAULT_EXECUTION_DELAY)
-        fee = summary.get("fee", DEFAULT_FEE)
+        try:
+            summary = results["summary"]
+            equity_records = results.get("equity_curve") or []
+            strategy_equity = pd.Series(
+                [r["value"] for r in equity_records],
+                index=pd.to_datetime([r["date"] for r in equity_records]),
+                dtype=float,
+            )
+            total_init_cash = float(summary["initial_cash"])
+            strategy_metrics = {
+                "total_return": summary["total_return_pct"] / 100.0,
+                "cagr": summary["annualized_return_pct"] / 100.0,
+                "max_drawdown": summary["max_drawdown_pct"] / 100.0,
+                "average_drawdown": summary.get("average_drawdown_pct", 0.0) / 100.0,
+                "sharpe_ratio": summary.get("sharpe_ratio"),
+                "sortino_ratio": summary.get("sortino_ratio"),
+            }
+            win_rate = summary["win_rate_pct"] / 100.0
+            total_trades = summary["total_trades"]
+            execution_delay = summary.get("execution_delay_bars", DEFAULT_EXECUTION_DELAY)
+            fee = summary.get("fee", DEFAULT_FEE)
+            strategy_name = summary.get("strategy_name", "RSI_Strategy_30_70")
+        except (KeyError, TypeError, ValueError) as exc:
+            st.error(
+                f"The backtest export at `{BACKTEST_RESULTS_PATH}` has an unrecognized "
+                f"schema ({exc}). It was probably written by an older engine version - "
+                "re-run `python -m quant_platform.main backtest` to refresh it."
+            )
+            return
+
+        if strategy_equity.empty:
+            st.error("The backtest export contains an empty equity curve. Re-run the backtest.")
+            return
     else:
         st.warning(
             "No backtest export found. Run `python -m quant_platform.main backtest` "
@@ -235,7 +270,7 @@ def main() -> None:
     st.sidebar.subheader("Key Ratios")
     col_kpi1, col_kpi2 = st.sidebar.columns(2)
     with col_kpi1:
-        st.metric("Sharpe", f"{strategy_metrics['sharpe_ratio']:.3f}")
+        st.metric("Sharpe", _fmt_ratio(strategy_metrics["sharpe_ratio"]))
         st.metric("Win Rate", f"{win_rate * 100:.1f}%")
     with col_kpi2:
         st.metric("Max Drawdown", f"{strategy_metrics['max_drawdown'] * 100:.1f}%")
@@ -274,7 +309,7 @@ def main() -> None:
                     f"${strat_final:,.2f}",
                     f"{strategy_metrics['total_return'] * 100:.2f}%",
                     f"{strategy_metrics['cagr'] * 100:.2f}%",
-                    f"{strategy_metrics['sharpe_ratio']:.3f}",
+                    _fmt_ratio(strategy_metrics["sharpe_ratio"]),
                     f"{strategy_metrics['max_drawdown'] * 100:.2f}%",
                     f"{strategy_metrics['average_drawdown'] * 100:.2f}%",
                 ],
@@ -283,7 +318,7 @@ def main() -> None:
                     f"${bench_final:,.2f}",
                     f"{benchmark_metrics['total_return'] * 100:.2f}%",
                     f"{benchmark_metrics['cagr'] * 100:.2f}%",
-                    f"{benchmark_metrics['sharpe_ratio']:.3f}",
+                    _fmt_ratio(benchmark_metrics["sharpe_ratio"]),
                     f"{benchmark_metrics['max_drawdown'] * 100:.2f}%",
                     f"{benchmark_metrics['average_drawdown'] * 100:.2f}%",
                 ],
@@ -324,20 +359,25 @@ def main() -> None:
             )
 
             col_tr1, col_tr2, col_tr3 = st.columns(3)
-            col_tr1.metric("Largest Win ($)", f"${trades['pnl'].max():,.2f}")
-            col_tr2.metric("Largest Loss ($)", f"${trades['pnl'].min():,.2f}")
-            col_tr3.metric("Average Profit per Trade ($)", f"${trades['pnl'].mean():,.2f}")
+            # KPIs follow the active filter so they never contradict the table.
+            col_tr1.metric("Largest Win ($)", f"${filtered['pnl'].max():,.2f}")
+            col_tr2.metric("Largest Loss ($)", f"${filtered['pnl'].min():,.2f}")
+            col_tr3.metric("Average Profit per Trade ($)", f"${filtered['pnl'].mean():,.2f}")
 
-            st.caption(f"Trade-level win rate: {trade_win_rate(trades, 'pnl') * 100:.2f}%")
+            st.caption(f"Trade-level win rate: {trade_win_rate(filtered, 'pnl') * 100:.2f}%")
 
     with tab3:
         st.write("#### Single Asset Pricing & Indicator Chart Auditor")
         selected_ticker = st.selectbox("Select Asset to Audit", sorted(close_pivot.columns))
 
+        # Markers reflect the thresholds the backtest actually used, recovered
+        # from the strategy name, instead of hard-coded 30/70.
+        rsi_entry, rsi_exit = _thresholds_from_strategy_name(strategy_name)
+
         asset_close = close_pivot[selected_ticker]
         asset_rsi = rsi_pivot[selected_ticker]
-        asset_entries = (asset_rsi < 30).fillna(False)
-        asset_exits = (asset_rsi > 70).fillna(False)
+        asset_entries = (asset_rsi < rsi_entry).fillna(False)
+        asset_exits = (asset_rsi > rsi_exit).fillna(False)
 
         fig_ind = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4])
         fig_ind.add_trace(
@@ -358,7 +398,7 @@ def main() -> None:
                 x=asset_close.index[asset_entries],
                 y=asset_close.values[asset_entries],
                 mode="markers",
-                name="Buy (RSI < 30)",
+                name=f"Buy (RSI < {rsi_entry:g})",
                 marker=dict(symbol="triangle-up", color="#10B981", size=11, line=dict(color="white", width=1)),
                 hovertemplate="Buy Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
             ),
@@ -371,7 +411,7 @@ def main() -> None:
                 x=asset_close.index[asset_exits],
                 y=asset_close.values[asset_exits],
                 mode="markers",
-                name="Sell (RSI > 70)",
+                name=f"Sell (RSI > {rsi_exit:g})",
                 marker=dict(symbol="triangle-down", color="#EF4444", size=11, line=dict(color="white", width=1)),
                 hovertemplate="Sell Date: %{x}<br>Price: $%{y:,.2f}<extra></extra>",
             ),
@@ -384,7 +424,7 @@ def main() -> None:
                 x=asset_rsi.index,
                 y=asset_rsi.values,
                 mode="lines",
-                name="RSI (14)",
+                name="RSI",
                 line=dict(color="#F59E0B", width=1.5),
                 hovertemplate="RSI Value: %{y:.2f}<extra></extra>",
             ),
@@ -393,21 +433,21 @@ def main() -> None:
         )
 
         fig_ind.add_hline(
-            y=70,
+            y=rsi_exit,
             line_dash="dash",
             line_color="#EF4444",
             row=2,
             col=1,
-            annotation_text="Overbought (70)",
+            annotation_text=f"Overbought ({rsi_exit:g})",
             annotation_position="top left",
         )
         fig_ind.add_hline(
-            y=30,
+            y=rsi_entry,
             line_dash="dash",
             line_color="#10B981",
             row=2,
             col=1,
-            annotation_text="Oversold (30)",
+            annotation_text=f"Oversold ({rsi_entry:g})",
             annotation_position="bottom left",
         )
 
