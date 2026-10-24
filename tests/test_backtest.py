@@ -76,7 +76,12 @@ def test_engine_declares_annualization_basis(seeded_db):
 
 def test_engine_metrics_are_finite(seeded_db):
     summary = BacktestEngine(RSIStrategy()).run(init_cash=10_000.0)["summary"]
-    for key in ("sharpe_ratio", "sortino_ratio", "annualized_return_pct", "max_drawdown_pct"):
+    # Sharpe/Sortino export as null (not a number) when a degenerate curve
+    # makes the ratio unbounded; anything numeric must be finite.
+    for key in ("sharpe_ratio", "sortino_ratio"):
+        value = summary[key]
+        assert value is None or np.isfinite(value), f"{key} must be finite or null"
+    for key in ("annualized_return_pct", "max_drawdown_pct"):
         assert np.isfinite(summary[key]), f"{key} must be finite"
 
 
