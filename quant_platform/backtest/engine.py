@@ -1,15 +1,16 @@
 import json
 import logging
+import math
 from pathlib import Path
 
 import pandas as pd
 import vectorbt as vbt
 
+from quant_platform import config
 from quant_platform.backtest.strategy import BaseStrategy
 from quant_platform.config import DEFAULT_EXECUTION_DELAY
 from quant_platform.data_access import load_aligned_matrices
 from quant_platform.metrics import (
-    drawdown_series,
     equity_curve,
     safe_float,
     summarize,
@@ -52,9 +53,9 @@ class BacktestEngine:
 
     def run(
         self,
-        init_cash: float = 10000.0,
-        fee: float = 0.001,
-        output_path: str = None,
+        init_cash: float = config.DEFAULT_INIT_CASH,
+        fee: float = config.DEFAULT_FEE,
+        output_path: str | None = None,
         slippage: float = 0.0,
     ) -> dict:
         """
@@ -64,6 +65,17 @@ class BacktestEngine:
         """
         # 1. Load aligned close and indicator matrices
         close, indicators = self.load_data()
+
+        # Drop symbols with no prices at all: they can never trade, and an
+        # equal cash slice reserved for a dead column just drags the metrics.
+        tradable = [col for col in close.columns if close[col].notna().any()]
+        if not tradable:
+            raise ValueError("No symbol has any price data; nothing to backtest.")
+        if len(tradable) < len(close.columns):
+            dead = [str(col) for col in close.columns if col not in tradable]
+            logger.warning("Excluding all-NaN symbol(s) from the backtest: %s", ", ".join(dead))
+            close = close[tradable]
+            indicators = {name: matrix[tradable] for name, matrix in indicators.items()}
 
         # 2. Generate signal masks on the strategy's own timeframe
         data_dict = {"close": close, **indicators}
@@ -77,6 +89,8 @@ class BacktestEngine:
         # 4. Simulate the portfolio via VectorBT.
         #    ``init_cash`` is total capital: it is split evenly across symbols so
         #    every name can hold a position and diversification is preserved.
+        #    The split is static - idle cash in one symbol's book cannot fund
+        #    another's entry - which makes the simulation conservative.
         cash_per_symbol = init_cash / len(close.columns)
         logger.info(
             "Simulating portfolio allocation using vectorbt (delay=%d bar(s), $%.2f per symbol)...",
@@ -98,12 +112,17 @@ class BacktestEngine:
         metrics = summarize(equity)
 
         trades_df = portfolio.trades.records_readable
+        # Open trades (still held at the last bar) have no realized PnL and are
+        # excluded from the win rate instead of counting as losses.
+        closed_trades = (
+            trades_df[trades_df["Exit Timestamp"].notna()] if "Exit Timestamp" in trades_df.columns else trades_df
+        )
         total_trades = len(trades_df)
-        win_rate = trade_win_rate(trades_df)
+        win_rate = trade_win_rate(closed_trades)
 
         trade_logs = self._extract_trade_logs(trades_df)
 
-        self._print_tear_sheet(init_cash, metrics, total_trades, win_rate)
+        self._log_tear_sheet(init_cash, metrics, total_trades, win_rate)
 
         # 6. Build the export payload
         results = {
@@ -119,8 +138,8 @@ class BacktestEngine:
                 "annualized_return_pct": metrics["cagr"] * 100.0,
                 "max_drawdown_pct": metrics["max_drawdown"] * 100.0,
                 "average_drawdown_pct": metrics["average_drawdown"] * 100.0,
-                "sharpe_ratio": metrics["sharpe_ratio"],
-                "sortino_ratio": metrics["sortino_ratio"],
+                "sharpe_ratio": _json_number(metrics["sharpe_ratio"]),
+                "sortino_ratio": _json_number(metrics["sortino_ratio"]),
                 "total_trades": total_trades,
                 "win_rate_pct": win_rate * 100.0,
             },
@@ -130,13 +149,17 @@ class BacktestEngine:
             "trades": trade_logs,
         }
 
-        # 7. Write to JSON
+        # 7. Write to JSON atomically: a crash mid-write must not leave a
+        #    truncated file that the dashboard then fails to parse.
         if output_path:
             out_file = Path(output_path)
             out_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(out_file, "w") as f:
-                json.dump(results, f, indent=4)
-            logger.info(f"Successfully exported metrics and trade logs to {out_file}")
+            tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
+            with open(tmp_file, "w") as f:
+                json.dump(results, f, indent=4, allow_nan=False)
+                f.write("\n")
+            tmp_file.replace(out_file)
+            logger.info("Successfully exported metrics and trade logs to %s", out_file)
 
         return results
 
@@ -153,15 +176,9 @@ class BacktestEngine:
             entry_date = row.get("Entry Timestamp", row.get("Entry Date", ""))
             exit_date = row.get("Exit Timestamp", row.get("Exit Date", ""))
 
-            if hasattr(entry_date, "strftime"):
-                entry_date = entry_date.strftime("%Y-%m-%d")
-            else:
-                entry_date = str(entry_date).split(" ")[0]
-
-            if hasattr(exit_date, "strftime"):
-                exit_date = exit_date.strftime("%Y-%m-%d")
-            else:
-                exit_date = str(exit_date).split(" ")[0]
+            entry_date = _format_trade_date(entry_date)
+            # Still-held trades export as null instead of the string "NaT".
+            exit_date = None if pd.isna(exit_date) else _format_trade_date(exit_date)
 
             trade_logs.append(
                 {
@@ -178,22 +195,40 @@ class BacktestEngine:
 
         return trade_logs
 
-    def _print_tear_sheet(self, init_cash: float, metrics: dict, total_trades: int, win_rate: float) -> None:
-        print("\n" + "=" * 50)
-        print("          VECTORBT PERFORMANCE TEAR SHEET")
-        print("=" * 50)
-        print(f"Strategy Name:      {self.strategy.name}")
-        print(f"Execution Delay:    {self.execution_delay} bar(s)")
-        print(f"Initial Capital:    ${init_cash:,.2f}")
-        print(f"Final Equity:       ${metrics['final_value']:,.2f}")
-        print(f"Total Return:       {metrics['total_return'] * 100:.2f}%")
-        print(f"Annualized Return:  {metrics['cagr'] * 100:.2f}%")
-        print(f"Max Drawdown:       {metrics['max_drawdown'] * 100:.2f}%")
-        print(f"Sharpe Ratio:       {metrics['sharpe_ratio']:.4f}")
-        print(f"Sortino Ratio:      {metrics['sortino_ratio']:.4f}")
-        print(f"Total Trades Run:   {total_trades}")
-        print(f"Win Rate:           {win_rate * 100:.2f}%")
-        print("=" * 50 + "\n")
+    def _log_tear_sheet(self, init_cash: float, metrics: dict, total_trades: int, win_rate: float) -> None:
+        logger.info(
+            "Tear sheet | strategy=%s delay=%d bars | initial $%.2f -> final $%.2f | "
+            "return %.2f%% (CAGR %.2f%%) | max DD %.2f%% | Sharpe %s Sortino %s | "
+            "%d trades, %.2f%% win rate",
+            self.strategy.name,
+            self.execution_delay,
+            init_cash,
+            metrics["final_value"],
+            metrics["total_return"] * 100.0,
+            metrics["cagr"] * 100.0,
+            metrics["max_drawdown"] * 100.0,
+            metrics["sharpe_ratio"],
+            metrics["sortino_ratio"],
+            total_trades,
+            win_rate * 100.0,
+        )
 
 
-__all__ = ["BacktestEngine", "drawdown_series"]
+def _format_trade_date(value) -> str | None:
+    """Render a trade timestamp as YYYY-MM-DD; NaT/empty become None."""
+    if value is None or pd.isna(value):
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
+    return str(value).split(" ")[0]
+
+
+def _json_number(value: float) -> float | None:
+    """Map non-finite metrics (e.g. an infinite Sharpe) to null for strict JSON."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+__all__ = ["BacktestEngine"]

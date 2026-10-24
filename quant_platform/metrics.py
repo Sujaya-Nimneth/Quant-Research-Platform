@@ -170,10 +170,17 @@ def average_drawdown(equity: pd.Series) -> float:
 
 
 def trade_win_rate(trades: pd.DataFrame, pnl_column: str = "PnL") -> float:
-    """Trade-level win rate as a fraction (not a mean of per-symbol rates)."""
+    """Trade-level win rate as a fraction (not a mean of per-symbol rates).
+
+    Rows with missing PnL - trades still open at the last bar - are excluded
+    rather than silently counted as losses.
+    """
     if trades.empty or pnl_column not in trades.columns:
         return 0.0
-    return float((trades[pnl_column] > 0).mean())
+    pnl = trades[pnl_column].dropna()
+    if pnl.empty:
+        return 0.0
+    return float((pnl > 0).mean())
 
 
 def summarize(equity: pd.Series) -> dict[str, float]:
