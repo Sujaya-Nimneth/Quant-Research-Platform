@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -11,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +40,12 @@ jobs:
             || { echo "::error::requirements.txt does not resolve on Python ${{ matrix.python-version }}"; exit 1; }
 
       - name: Install dependencies
-        run: pip install -r requirements-dev.txt
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Smoke test the installed console script
+        run: quant-platform --help
 
       - name: Lint
         run: ruff check quant_platform tests
@@ -43,5 +53,5 @@ jobs:
       - name: Check formatting
         run: ruff format --check quant_platform tests
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage
+        run: pytest -q --cov=quant_platform --cov-report=term-missing
