@@ -37,10 +37,11 @@ graph TD
    provider (Alpaca, Polygon, IBKR) means writing one class; nothing in the
    storage or feature layers changes.
 
-2. **Incremental ingestion.** Each run resumes from the most recent stored
-   session per the `daily_prices` max date rather than re-downloading the whole
-   history. `--full-refresh` overrides this. Per-symbol retries with exponential
-   backoff handle transient provider errors.
+2. **Incremental ingestion.** Each symbol resumes from **its own** most recent
+   stored session, so a lagging symbol (halt, transient failure) is backfilled
+   instead of stranded by the global max date. `--full-refresh` overrides this.
+   Downloads are batched per group, with per-symbol retries and exponential
+   backoff covering whatever the batch missed.
 
 3. **Extendable Signal Factory.** Drop a module into
    `quant_platform/features/` containing a `BaseSignal` subclass and it is
@@ -71,7 +72,9 @@ pip install -r requirements.txt       # runtime
 pip install -r requirements-dev.txt   # runtime + test/lint tooling
 ```
 
-Python 3.11+ is required.
+Python 3.11+ is required (Streamlit 1.46+ for the dashboard). Optionally
+`pip install -e .` to get the `quant-platform` console script, which is
+equivalent to `python -m quant_platform.main`.
 
 ### 2. Ingest price data
 
@@ -91,7 +94,9 @@ Without it, a failed scrape falls back to the 15-ticker default and logs a
 warning.
 
 Prices are requested with `auto_adjust=False`, so `adj_close` is a genuine
-split/dividend-adjusted series rather than a duplicate of `close`.
+split/dividend-adjusted series rather than a duplicate of `close` — and it is
+the series the signals, backtest fills, and dashboard benchmark all run on,
+so a split or dividend never masquerades as a price move.
 
 ### 3. Compute features
 
@@ -115,28 +120,21 @@ python -m quant_platform.main backtest \
     --output data/backtest_results.json
 ```
 
-Example tear sheet:
+Optional window and universe filters avoid loading the full history:
 
-```
-==================================================
-          VECTORBT PERFORMANCE TEAR SHEET
-==================================================
-Strategy Name:      RSI_Strategy_30_70
-Execution Delay:    1 bar(s)
-Initial Capital:    $10,000.00
-Final Equity:       $13,143.84
-Total Return:       31.44%
-Annualized Return:  10.33%
-Max Drawdown:       10.57%
-Sharpe Ratio:       1.0185
-Sortino Ratio:      1.3936
-Total Trades Run:   44
-Win Rate:           81.82%
-==================================================
+```bash
+python -m quant_platform.main backtest --start-date 2024-06-01 --symbols AAPL,MSFT
 ```
 
-`--init-cash` is **total** portfolio capital, split evenly across symbols so
-diversification is preserved.
+The summary is written to the log, e.g. (sample output — your numbers will
+differ):
+
+```
+Tear sheet | strategy=RSI_Strategy_30_70 delay=1 bars | initial $10000.00 -> final $13143.84 | return 31.42% (CAGR 10.33%) | max DD 10.57% | Sharpe 1.0185 Sortino 1.3936 | 44 trades, 81.82% win rate
+```
+
+`--init-cash` is **total** portfolio capital held in one shared cash book:
+any symbol's entry can use capital not yet deployed elsewhere.
 
 ### 6. Launch the dashboard
 
@@ -168,9 +166,12 @@ from quant_platform.features.base import BaseSignal
 
 
 class VolatilitySignal(BaseSignal):
+    def __init__(self, window: int = 15):
+        self._window = window
+
     @property
     def name(self) -> str:
-        return "custom_volatility"
+        return "volatility_signals"
 
     @property
     def required_columns(self) -> list[str]:
@@ -180,8 +181,8 @@ class VolatilitySignal(BaseSignal):
         df = data.sort_values("date").copy()
 
         result_df = pd.DataFrame({"symbol": df["symbol"], "date": df["date"]})
-        rolling_std = df["close"].rolling(window=15).std()
-        result_df["volatility_15d"] = rolling_std
+        rolling_std = df["close"].rolling(window=self._window).std()
+        result_df[f"volatility_{self._window}d"] = rolling_std
 
         return result_df
 ```
@@ -239,15 +240,16 @@ averaging per-symbol statistics.
 | Metric | Definition |
 |---|---|
 | Total Return | `final_value / initial_value − 1` |
-| CAGR | `(final / initial)^(252 / n_bars) − 1` |
+| CAGR | `(final / initial)^(1 / years) − 1`, years from elapsed index time (bar count as fallback) |
 | Sharpe | `mean(excess daily return) / std(excess daily return) × √252` |
 | Sortino | `mean(excess) / sqrt(mean(min(excess, 0)²)) × √252` |
 | Max Drawdown | Largest peak-to-trough decline, reported as a positive fraction |
-| Win Rate | Fraction of **trades** with positive PnL |
+| Win Rate | Fraction of **closed trades** with positive PnL (still-open positions excluded) |
 
 Annualization uses **252 trading days**. VectorBT's `stats()` annualizes a
 `"1D"` frequency over 365 calendar days, which overstates Sharpe by roughly
-20%; the engine therefore computes these metrics itself.
+20%; the engine therefore computes these metrics itself. Degenerate curves
+(zero volatility with a drift) report an unbounded ratio, exported as `null`.
 
 ---
 
@@ -256,11 +258,13 @@ Annualization uses **252 trading days**. VectorBT's `stats()` annualizes a
 ```bash
 python quant_platform/run_all.py                 # 15-ticker test universe
 python quant_platform/run_all.py --full-universe # full S&P 500
+python quant_platform/run_all.py --start-date 2023-01-01
 ```
 
 Runs ingest → features → backtest in sequence. The runner pins the working
 directory and `PYTHONPATH` to the project root, so it works from cron, systemd,
-or any other directory.
+or any other directory. Each stage gets a one-hour timeout so a hung download
+cannot wedge a scheduled run.
 
 For scheduling, invoke the runner from your own scheduler, for example:
 
@@ -309,8 +313,9 @@ data/                    # local DuckDB + JSON exports (git-ignored)
 
 - **Daily bars only.** Intraday data, corporate-action events, and survivorship
   bias in the S&P 500 constituent list are not modelled.
-- **No position sizing or risk model.** Capital is split evenly across symbols
-  and each entry takes an equal share.
+- **No position sizing or risk model.** Entries consume from the shared cash
+  book in vectorbt's default call order; there is no volatility targeting or
+  per-name exposure limit.
 - **Single strategy family.** Only the RSI mean-reversion strategy is
   implemented; the `BaseStrategy` interface is the extension point.
 - **Backtests are in-sample.** There is no walk-forward or out-of-sample

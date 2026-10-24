@@ -76,7 +76,7 @@ def test_discovers_builtin_signals_without_duplicates():
     factory = SignalFactory()
     assert "momentum_signals" in factory.signals
     assert "mean_reversion_signals" in factory.signals
-    assert "custom_volatility" in factory.signals
+    assert "volatility_signals" in factory.signals
 
 
 def test_validation_rejects_wrong_row_count(populated_db):

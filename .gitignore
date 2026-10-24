@@ -15,12 +15,22 @@ env/
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # Local data artifacts (regenerate with `python -m quant_platform.main ingest`)
-data/*.db
-data/*.db.wal
-data/*.json
+data/
+
+# Environment / secrets
+.env
+.env.*
+
+# Scheduled-run logs (see README cron example)
+logs/
+
+# Tooling noise
+.python-version
+.ipynb_checkpoints/
 
 # OS noise
 .DS_Store

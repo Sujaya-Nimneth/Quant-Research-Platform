@@ -22,7 +22,7 @@ class VolatilitySignal(BaseSignal):
 
     @property
     def name(self) -> str:
-        return "custom_volatility"
+        return "volatility_signals"
 
     @property
     def required_columns(self) -> list[str]:

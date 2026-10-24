@@ -15,7 +15,7 @@ from quant_platform.features.base import BaseSignal
 logger = logging.getLogger(__name__)
 
 # Columns managed by the schema itself, never written by a signal module.
-RESERVED_COLUMNS = {"symbol", "date", "calculated_at", "ingested_at"}
+RESERVED_COLUMNS = {"symbol", "date", "calculated_at"}
 
 
 class SignalFactory:
