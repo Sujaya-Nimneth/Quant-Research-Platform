@@ -9,10 +9,10 @@ class VolatilitySignal(BaseSignal):
     Computes a rolling close-price volatility ratio.
 
     Two variants are produced so both the "dispersion" and the "normalised"
-    views are available:
+    views are available (column names follow the configured window):
 
-    * ``volatility_15d``     - 15-day rolling standard deviation of close.
-    * ``volatility_ratio_15d`` - that standard deviation divided by close.
+    * ``volatility_{window}d``     - rolling standard deviation of close.
+    * ``volatility_ratio_{window}d`` - that standard deviation divided by close.
     """
 
     def __init__(self, window: int = 15):
@@ -40,7 +40,9 @@ class VolatilitySignal(BaseSignal):
 
         rolling_std = df["close"].rolling(window=self._window).std()
 
-        result_df["volatility_15d"] = rolling_std
-        result_df["volatility_ratio_15d"] = rolling_std / df["close"].replace(0, np.nan)
+        dollar_col = f"volatility_{self._window}d"
+        ratio_col = f"volatility_ratio_{self._window}d"
+        result_df[dollar_col] = rolling_std
+        result_df[ratio_col] = rolling_std / df["close"].replace(0, np.nan)
 
         return result_df

@@ -2,18 +2,16 @@ import importlib
 import inspect
 import logging
 import pkgutil
-import re
 from pathlib import Path
 
 import pandas as pd
 
 from quant_platform.db.connection import get_db_connection
+from quant_platform.db.identifiers import quote_identifier
 from quant_platform.db.schema import init_db
 from quant_platform.features.base import BaseSignal
 
 logger = logging.getLogger(__name__)
-
-IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Columns managed by the schema itself, never written by a signal module.
 RESERVED_COLUMNS = {"symbol", "date", "calculated_at", "ingested_at"}
@@ -167,13 +165,6 @@ class SignalFactory:
         """Feature columns to persist, excluding keys and reserved metadata."""
         return [c for c in features_df.columns if c not in RESERVED_COLUMNS]
 
-    @staticmethod
-    def _quote_identifier(name: str) -> str:
-        """Validate a column name so it can be safely interpolated into DDL."""
-        if not IDENTIFIER_RE.match(name):
-            raise ValueError(f"Unsafe column name produced by a signal: {name!r}")
-        return f'"{name}"'
-
     def run_pipeline(self) -> int:
         """
         Executes the entire feature engineering pipeline:
@@ -237,7 +228,7 @@ class SignalFactory:
         for col in feature_cols:
             if col not in db_col_names:
                 logger.info("Database Migration: adding column '%s' to 'signals'.", col)
-                conn.execute(f"ALTER TABLE signals ADD COLUMN {self._quote_identifier(col)} DOUBLE")
+                conn.execute(f"ALTER TABLE signals ADD COLUMN {quote_identifier(col)} DOUBLE")
 
     def _upsert_features(self, conn, features_df: pd.DataFrame, feature_cols: list[str]) -> int:
         """Insert new keys and update existing ones.
@@ -255,9 +246,7 @@ class SignalFactory:
 
             update_cols = [c for c in feature_cols if c not in key_cols]
             if update_cols:
-                assignments = ", ".join(
-                    f"{self._quote_identifier(c)} = src.{self._quote_identifier(c)}" for c in update_cols
-                )
+                assignments = ", ".join(f"{quote_identifier(c)} = src.{quote_identifier(c)}" for c in update_cols)
                 conn.execute(f"""
                     UPDATE signals AS dst
                     SET {assignments}, calculated_at = CURRENT_TIMESTAMP
@@ -266,8 +255,8 @@ class SignalFactory:
                 """)
 
             all_cols = key_cols + update_cols
-            cols_str = ", ".join(self._quote_identifier(c) for c in all_cols)
-            select_str = ", ".join(f"src.{self._quote_identifier(c)}" for c in all_cols)
+            cols_str = ", ".join(quote_identifier(c) for c in all_cols)
+            select_str = ", ".join(f"src.{quote_identifier(c)}" for c in all_cols)
 
             conn.execute(f"""
                 INSERT INTO signals ({cols_str})

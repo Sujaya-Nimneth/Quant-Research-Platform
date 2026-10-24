@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 import pytest
 
+from quant_platform.db.identifiers import quote_identifier
 from quant_platform.features.base import BaseSignal
 from quant_platform.features.factory import SignalFactory
 
@@ -164,9 +165,8 @@ def test_calculated_at_is_refreshed(populated_db):
 
 
 def test_unsafe_column_names_are_rejected():
-    factory = SignalFactory()
     with pytest.raises(ValueError):
-        factory._quote_identifier('evil"; DROP TABLE signals; --')
+        quote_identifier('evil"; DROP TABLE signals; --')
 
 
 def test_reserved_columns_are_not_treated_as_features():
