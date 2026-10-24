@@ -32,15 +32,6 @@ class _AlwaysBuy(BaseStrategy):
         return entries, exits
 
 
-@pytest.fixture()
-def seeded_db(populated_db):
-    """Populate signals with a deterministic RSI-like column."""
-    from quant_platform.features.factory import SignalFactory
-
-    SignalFactory().run_pipeline()
-    return populated_db
-
-
 def test_execution_delay_below_one_is_rejected():
     with pytest.raises(ValueError, match="look-ahead"):
         BacktestEngine(RSIStrategy(), execution_delay=0)

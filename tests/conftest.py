@@ -75,3 +75,12 @@ def populated_db(empty_db, price_frame):
     conn.unregister("prices")
     conn.close()
     return empty_db
+
+
+@pytest.fixture()
+def seeded_db(populated_db):
+    """Populate signals with the real feature pipeline."""
+    from quant_platform.features.factory import SignalFactory
+
+    SignalFactory().run_pipeline()
+    return populated_db
